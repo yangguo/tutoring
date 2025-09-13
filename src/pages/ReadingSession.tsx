@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { api, Book, BookPage, VocabularyWord, DiscussionMessage } from '../lib/api';
 import ChatInterface from '../components/ChatInterface';
+import { convertPdfFileToImages } from '../lib/pdf';
 
 
 
@@ -54,6 +55,8 @@ const ReadingSession: React.FC = () => {
   const [discussionMessages, setDiscussionMessages] = useState<DiscussionMessage[]>([]);
   const [loadingDiscussion, setLoadingDiscussion] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const [convertingPdf, setConvertingPdf] = useState(false);
+  const [conversionMessage, setConversionMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (bookId) {
@@ -402,6 +405,54 @@ const ReadingSession: React.FC = () => {
 
   // If there are no page images but we have a PDF, show embedded PDF viewer
   const inlinePdfUrl = (book as any)?.pdf_file_url as string | undefined;
+  const handleConvertExistingPdf = async () => {
+    if (!inlinePdfUrl || !book?.id || convertingPdf) return;
+    try {
+      setConvertingPdf(true);
+      setConversionMessage('Downloading PDF...');
+      const resp = await fetch(inlinePdfUrl, { credentials: 'omit' });
+      if (!resp.ok) throw new Error('Failed to download PDF');
+      const pdfBlob = await resp.blob();
+      const pdfFile = new File([pdfBlob], `${book.title || 'book'}.pdf`, { type: 'application/pdf' });
+
+      setConversionMessage('Converting PDF to images...');
+      const images = await convertPdfFileToImages(pdfFile);
+      setConversionMessage(`Uploading ${images.length} page images...`);
+
+      const token = localStorage.getItem('auth_token');
+      if (!token) throw new Error('Authentication required');
+
+      const pagesForm = new FormData();
+      images.forEach(({ blob, pageNumber }) => {
+        const name = `page-${pageNumber}.png`;
+        pagesForm.append('pages', new File([blob], name, { type: 'image/png' }), name);
+      });
+
+      const uploadResp = await fetch(`/api/upload/book/${book.id}/pages`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: pagesForm,
+      });
+      const uploadResult = await uploadResp.json().catch(() => ({}));
+      if (!uploadResp.ok) {
+        throw new Error(uploadResult.error || 'Failed to upload page images');
+      }
+
+      setConversionMessage(null);
+      toast.success(`Converted and uploaded ${images.length} pages.`);
+      // Reload book data to pick up new pages
+      setLoading(true);
+      await fetchBookData();
+    } catch (err) {
+      console.error('PDF conversion failed:', err);
+      setConversionMessage(null);
+      toast.error(err instanceof Error ? err.message : 'PDF conversion failed');
+    } finally {
+      setConvertingPdf(false);
+      setLoading(false);
+    }
+  };
+
   if (pages.length === 0 && inlinePdfUrl) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
@@ -424,9 +475,26 @@ const ReadingSession: React.FC = () => {
               <iframe title="PDF" src={inlinePdfUrl} className="w-full h-full" />
             </div>
           </div>
-          <p className="text-sm text-gray-600 mt-3">
-            Tip: If the PDF doesn’t render, open it in a new tab from the Library.
-          </p>
+          <div className="mt-4 flex items-center justify-between">
+            <p className="text-sm text-gray-600">
+              Tip: If the PDF doesn’t render, open it in a new tab from the Library.
+            </p>
+            <div className="flex items-center gap-3">
+              {conversionMessage && (
+                <span className="text-sm text-gray-700">{conversionMessage}</span>
+              )}
+              <button
+                onClick={handleConvertExistingPdf}
+                disabled={convertingPdf}
+                className={`px-4 py-2 rounded-lg text-white ${
+                  convertingPdf ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'
+                }`}
+                title="Convert PDF to page images for better reading experience"
+              >
+                {convertingPdf ? 'Converting…' : 'Convert PDF to Images'}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     );

@@ -111,7 +111,7 @@ const Dashboard: React.FC = () => {
       }
 
       // Fetch lesson plans - use different endpoint for students vs parents/admins
-      const userRole = user?.user_metadata?.role || 'child';
+      const userRole = user?.role || 'child';
       const lessonsEndpoint = userRole === 'child' ? '/api/dashboard/my-lessons' : '/api/dashboard/lessons';
       const lessonsResponse = await fetch(lessonsEndpoint, {
         headers: {
@@ -599,88 +599,7 @@ const Dashboard: React.FC = () => {
           </div>
         )}
 
-        {/* Parent Overview Tab */}
-        {activeTab === 'overview' && userRole === 'parent' && (
-          <div className="space-y-6">
-            {/* Parent Stats Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <div className="flex items-center">
-                  <div className="p-2 bg-blue-100 rounded-lg">
-                    <Users className="h-6 w-6 text-blue-600" />
-                  </div>
-                  <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600">My Children</p>
-                    <p className="text-2xl font-bold text-gray-900">2</p>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <div className="flex items-center">
-                  <div className="p-2 bg-green-100 rounded-lg">
-                    <BookOpen className="h-6 w-6 text-green-600" />
-                  </div>
-                  <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600">Total Books Read</p>
-                    <p className="text-2xl font-bold text-gray-900">25</p>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <div className="flex items-center">
-                  <div className="p-2 bg-yellow-100 rounded-lg">
-                    <Clock className="h-6 w-6 text-yellow-600" />
-                  </div>
-                  <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600">Total Reading Time</p>
-                    <p className="text-2xl font-bold text-gray-900">180 min</p>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="bg-white rounded-lg shadow-md p-6">
-                <div className="flex items-center">
-                  <div className="p-2 bg-purple-100 rounded-lg">
-                    <Award className="h-6 w-6 text-purple-600" />
-                  </div>
-                  <div className="ml-4">
-                    <p className="text-sm font-medium text-gray-600">Achievements</p>
-                    <p className="text-2xl font-bold text-gray-900">15</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Children Progress */}
-            <div className="bg-white rounded-lg shadow-md p-6">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">Children\'s Progress</h3>
-              <div className="space-y-4">
-                {[
-                  { name: 'Emma', age: 8, booksRead: 12, readingTime: 90, level: 'Beginner' },
-                  { name: 'Liam', age: 10, booksRead: 13, readingTime: 90, level: 'Intermediate' }
-                ].map((child, index) => (
-                  <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                    <div className="flex items-center space-x-4">
-                      <div className="w-10 h-10 bg-gradient-to-r from-purple-400 to-pink-400 rounded-full flex items-center justify-center text-white font-semibold">
-                        {child.name.charAt(0)}
-                      </div>
-                      <div>
-                        <p className="font-medium text-gray-900">{child.name} ({child.age} years)</p>
-                        <p className="text-sm text-gray-600">Level: {child.level}</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="font-semibold text-gray-900">{child.booksRead} books</p>
-                      <p className="text-sm text-gray-600">{child.readingTime} min this week</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
+        
 
         {/* Parent Students Tab */}
         {activeTab === 'students' && userRole === 'parent' && (
@@ -752,7 +671,7 @@ const Dashboard: React.FC = () => {
         )}
 
         {/* Lesson Plans Tab */}
-        {activeTab === 'lessons' && (userRole === 'parent' || userRole === 'admin') && (
+        {(activeTab === 'lessons' || activeTab === 'content') && (userRole === 'parent' || userRole === 'admin') && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <h3 className="text-lg font-semibold text-gray-800">Lesson Plans</h3>

@@ -113,7 +113,21 @@ router.get('/lessons', async (req: Request, res: Response) => {
       return res.status(500).json({ error: 'Failed to fetch lessons' });
     }
 
-    res.json(lessons || []);
+    // Transform to frontend shape to match LessonPlan interface
+    const transformed = (lessons || []).map((lesson: any) => ({
+      id: lesson.id,
+      title: lesson.title,
+      description: lesson.description,
+      targetLevel: lesson.target_level,
+      duration: lesson.duration,
+      objectives: lesson.objectives || [],
+      activities: lesson.activities || [],
+      assignedStudents: lesson.assigned_students || [],
+      bookIds: lesson.book_ids || [],
+      createdAt: lesson.created_at,
+    }));
+
+    res.json(transformed);
   } catch (error) {
     console.error('Error in /lessons route:', error);
     res.status(500).json({ error: 'Internal server error' });

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Upload as UploadIcon, BookOpen, AlertCircle, CheckCircle } from 'lucide-react';
+import { convertPdfFileToImages } from '../lib/pdf';
 
 interface UploadFormData {
   title: string;
@@ -27,6 +28,7 @@ const Upload: React.FC = () => {
   });
 
   const [isUploading, setIsUploading] = useState(false);
+  const [conversionProgress, setConversionProgress] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<{
     type: 'success' | 'error' | null;
     message: string;
@@ -107,6 +109,7 @@ const Upload: React.FC = () => {
     }
 
     setIsUploading(true);
+    setConversionProgress(null);
     setUploadStatus({ type: null, message: '' });
 
     try {
@@ -142,10 +145,51 @@ const Upload: React.FC = () => {
         throw new Error(result.error || 'Upload failed');
       }
 
-      setUploadStatus({
-        type: 'success',
-        message: 'Book uploaded successfully!'
-      });
+      // If a PDF was uploaded, convert to images and upload pages
+      if (formData.file && formData.file.type === 'application/pdf' && result?.book?.id) {
+        try {
+          setConversionProgress('Converting PDF to images...');
+          const images = await convertPdfFileToImages(formData.file);
+          setConversionProgress(`Uploading ${images.length} page images...`);
+
+          // Build FormData for pages
+          const pagesForm = new FormData();
+          images.forEach(({ blob, pageNumber }, idx) => {
+            const fileName = `page-${pageNumber}.png`;
+            const file = new File([blob], fileName, { type: 'image/png' });
+            pagesForm.append('pages', file, fileName);
+          });
+
+          const pagesResp = await fetch(`/api/upload/book/${result.book.id}/pages`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            body: pagesForm,
+          });
+          const pagesResult = await pagesResp.json().catch(() => ({}));
+          if (!pagesResp.ok) {
+            throw new Error(pagesResult.error || 'Failed to upload page images');
+          }
+
+          setConversionProgress(null);
+          setUploadStatus({
+            type: 'success',
+            message: `Book uploaded and ${images.length} pages processed.`
+          });
+        } catch (convErr) {
+          setConversionProgress(null);
+          setUploadStatus({
+            type: 'error',
+            message: convErr instanceof Error ? convErr.message : 'PDF conversion failed'
+          });
+        }
+      } else {
+        setUploadStatus({
+          type: 'success',
+          message: 'Book uploaded successfully!'
+        });
+      }
 
       // Reset form
       setFormData({
@@ -184,7 +228,7 @@ const Upload: React.FC = () => {
           <h1 className="text-3xl font-bold text-gray-900">Upload Book</h1>
         </div>
 
-        {uploadStatus.type && (
+        {(uploadStatus.type || conversionProgress) && (
           <div className={`mb-6 p-4 rounded-md flex items-center ${
             uploadStatus.type === 'success' 
               ? 'bg-green-50 text-green-800 border border-green-200' 
@@ -195,7 +239,7 @@ const Upload: React.FC = () => {
             ) : (
               <AlertCircle className="h-5 w-5 mr-2" />
             )}
-            {uploadStatus.message}
+            {conversionProgress ? conversionProgress : uploadStatus.message}
           </div>
         )}
 
