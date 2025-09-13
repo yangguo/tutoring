@@ -15,6 +15,7 @@ interface LessonPlan {
   bookIds: string[];
   assignedStudents: string[];
   createdAt: string;
+  books?: Book[];
 }
 
 interface Book {
@@ -65,27 +66,31 @@ const LessonSession: React.FC = () => {
       }
       
       setLesson(currentLesson);
-      
-      // Fetch books associated with the lesson
-      if (currentLesson.bookIds && currentLesson.bookIds.length > 0) {
-        const booksResponse = await fetch('/api/books', {
-          headers: {
-            'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-          }
-        });
-        
-        if (booksResponse.ok) {
-          const allBooks = await booksResponse.json();
-          const lessonBooks = allBooks.filter((book: Book) => 
-            currentLesson.bookIds.includes(book.id)
-          );
-          setBooks(lessonBooks);
-          
-          // Auto-select the first book if available
-          if (lessonBooks.length > 0) {
-            setSelectedBook(lessonBooks[0]);
+
+      // Prefer books included in the lesson payload
+      if (currentLesson.books && currentLesson.books.length > 0) {
+        setBooks(currentLesson.books as Book[]);
+        setSelectedBook(currentLesson.books[0] as Book);
+      } else if (currentLesson.bookIds && currentLesson.bookIds.length > 0) {
+        // Fallback: fetch minimal book info for listed ids
+        const results: Book[] = [];
+        for (const id of currentLesson.bookIds) {
+          try {
+            const resp = await fetch(`/api/books/${id}`, {
+              headers: {
+                'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+              }
+            });
+            if (resp.ok) {
+              const data = await resp.json();
+              if (data?.book) results.push(data.book);
+            }
+          } catch (e) {
+            // ignore individual failures
           }
         }
+        setBooks(results);
+        if (results.length > 0) setSelectedBook(results[0]);
       }
     } catch (err) {
       console.error('Error fetching lesson data:', err);

@@ -337,6 +337,22 @@ class ApiClient {
     return this.request(`/api/upload/book/${bookId}`, { method: 'DELETE' });
   }
 
+  async updateBook(bookId: string, updates: Partial<{
+    title: string;
+    description: string;
+    category: string;
+    language: string;
+    is_public: boolean;
+    target_age_min: number;
+    target_age_max: number;
+    difficulty_level: 'beginner' | 'intermediate' | 'advanced';
+  }>) {
+    return this.request<{ message: string; book: Book }>(`/api/upload/book/${bookId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(updates),
+    });
+  }
+
   // AI-powered Image Understanding
   async analyzeImage(imageUrl: string, pageId?: string, context?: string) {
     return this.request<{ description: string; vocabulary: VocabularyWord[]; updated_page?: boolean }>('/api/books/analyze-image', {

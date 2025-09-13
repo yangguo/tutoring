@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { authenticateToken } from '../middleware/auth';
+import { authenticateToken } from '../utils/jwt';
 
 interface ChatMessage {
   role: 'user' | 'assistant';

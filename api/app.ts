@@ -15,13 +15,14 @@ import booksRoutes from './routes/books.js';
 import achievementsRoutes from './routes/achievements.js';
 import dashboardRoutes from './routes/dashboard.js';
 import chatRoutes from './routes/chat.js';
+import { runAllChecks } from './utils/health.js';
 
 // for esm mode
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// load env
-dotenv.config();
+// load env from project root
+dotenv.config({ path: path.join(__dirname, '../.env') });
 
 const app: express.Application = express();
 
@@ -67,6 +68,16 @@ app.use('/api/health', (req: Request, res: Response, next: NextFunction): void =
     version: '1.0.0',
     timestamp: new Date().toISOString()
   });
+});
+
+// Detailed health checks (env + Supabase connectivity)
+app.get('/api/health/checks', async (_req: Request, res: Response) => {
+  try {
+    const results = await runAllChecks();
+    res.status(results.ok ? 200 : 500).json({ success: results.ok, ...results });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e?.message || 'Health checks failed' });
+  }
 });
 
 // API documentation endpoint

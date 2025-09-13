@@ -5,6 +5,7 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
 import { Book, Search, Filter, BookOpen, Star, Clock, Users, ChevronDown } from 'lucide-react';
+import { useAuthStore } from '../stores/authStore';
 
 interface BookData {
   id: string;
@@ -16,6 +17,11 @@ interface BookData {
   category: string;
   page_count: number;
   created_at: string;
+  // Optional file info from API (present for uploads)
+  pdf_file_url?: string;
+  file_url?: string;
+  file_type?: string;
+  uploaded_by?: string;
 }
 
 interface FilterOptions {
@@ -37,6 +43,15 @@ export default function Library() {
     ageRange: '',
     sortBy: 'newest'
   });
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [editing, setEditing] = useState<BookData | null>(null);
+  const [editForm, setEditForm] = useState<{ title: string; description: string; category: string; is_public: boolean }>({
+    title: '',
+    description: '',
+    category: '',
+    is_public: false,
+  });
+  const { user } = useAuthStore();
 
   const categories = [
     'Adventure', 'Fantasy', 'Science', 'Animals', 'Friendship', 
@@ -156,12 +171,29 @@ export default function Library() {
 
   const BookCard = ({ book }: { book: BookData }) => (
     <Link
-      to={`/book/${book.id}`}
+      to={`/reading/${book.id}`}
       className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-lg transition-all duration-200 group"
     >
-      {/* Book Cover */}
-      <div className="aspect-[3/4] bg-gradient-to-br from-blue-100 via-purple-100 to-pink-100 rounded-lg mb-4 flex items-center justify-center group-hover:scale-105 transition-transform">
+      {/* Book Cover (click to open PDF if available) */}
+      <div
+        className={`relative aspect-[3/4] bg-gradient-to-br from-blue-100 via-purple-100 to-pink-100 rounded-lg mb-4 flex items-center justify-center group-hover:scale-105 transition-transform ${book.pdf_file_url ? 'cursor-pointer' : ''}`}
+        onClick={(e) => {
+          if (book.pdf_file_url) {
+            e.preventDefault();
+            e.stopPropagation();
+            setPdfUrl(book.pdf_file_url);
+          }
+        }}
+        role={book.pdf_file_url ? 'button' : undefined}
+        aria-label={book.pdf_file_url ? 'Open PDF preview' : 'Book cover'}
+        title={book.pdf_file_url ? 'Open PDF' : undefined}
+      >
         <BookOpen className="w-12 h-12 text-blue-500" />
+        {book.pdf_file_url && (
+          <span className="absolute bottom-2 right-2 text-[11px] px-2 py-1 rounded bg-white/90 text-blue-700 border border-blue-100 shadow-sm">
+            Open PDF
+          </span>
+        )}
       </div>
 
       {/* Book Info */}
@@ -192,6 +224,31 @@ export default function Library() {
           <span className="text-xs text-gray-500">{book.category}</span>
           <span className="text-xs text-gray-500">{book.age_range}</span>
         </div>
+
+        {/* PDF shortcut removed; click the cover to open */}
+
+        {/* Edit button for owner/admin */}
+        {(user && (book.uploaded_by === user.id || user.role === 'admin')) && (
+          <div className="pt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setEditing(book);
+                setEditForm({
+                  title: book.title || '',
+                  description: book.description || '',
+                  category: book.category || '',
+                  is_public: false,
+                });
+              }}
+              className="text-xs text-gray-600 hover:text-gray-900 px-2 py-1 rounded-md border border-gray-300 hover:bg-gray-50"
+            >
+              Edit
+            </button>
+          </div>
+        )}
       </div>
     </Link>
   );
@@ -363,6 +420,131 @@ export default function Library() {
           </div>
         )}
       </div>
+
+      {/* PDF Modal Viewer */}
+      {pdfUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="PDF viewer"
+          onClick={() => setPdfUrl(null)}
+        >
+          <div
+            className="bg-white w-full max-w-5xl max-h-[90vh] rounded-xl shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-3 border-b">
+              <span className="text-sm text-gray-600 truncate pr-3">PDF Preview</span>
+              <button
+                onClick={() => setPdfUrl(null)}
+                className="text-gray-600 hover:text-gray-900 text-sm px-3 py-1 rounded-md border border-gray-300 hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+            <div className="w-full h-[80vh] bg-gray-100">
+              <iframe
+                title="PDF"
+                src={pdfUrl}
+                className="w-full h-full"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Modal */}
+      {editing && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Edit book"
+          onClick={() => setEditing(null)}
+        >
+          <div
+            className="bg-white w-full max-w-lg rounded-xl shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="font-semibold">Edit Book</h3>
+              <button
+                onClick={() => setEditing(null)}
+                className="text-gray-600 hover:text-gray-900 text-sm px-3 py-1 rounded-md border border-gray-300 hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
+            <form
+              className="p-4 space-y-3"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                if (!editing) return;
+                try {
+                  await api.updateBook(editing.id, {
+                    title: editForm.title,
+                    description: editForm.description,
+                    category: editForm.category,
+                    is_public: editForm.is_public,
+                  });
+                  // Refresh books list in-place
+                  setBooks((prev) => prev.map(b => b.id === editing.id ? { ...b, ...editForm } as any : b));
+                  setEditing(null);
+                } catch (err) {
+                  console.error('Failed to update book:', err);
+                  alert('Failed to update book');
+                }
+              }}
+            >
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">Title</label>
+                <input
+                  type="text"
+                  value={editForm.title}
+                  onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">Description</label>
+                <textarea
+                  value={editForm.description}
+                  onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  rows={4}
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">Category</label>
+                <input
+                  type="text"
+                  value={editForm.category}
+                  onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
+              </div>
+              <div className="flex items-center justify-between pt-2">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="checkbox"
+                    checked={editForm.is_public}
+                    onChange={(e) => setEditForm({ ...editForm, is_public: e.target.checked })}
+                  />
+                  Make Public
+                </label>
+                <button
+                  type="submit"
+                  className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+                >
+                  Save
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

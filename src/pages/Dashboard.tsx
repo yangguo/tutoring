@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
 import { Calendar, Users, BookOpen, TrendingUp, Award, Clock, Target, Plus, Edit, Trash2, Eye, Check } from 'lucide-react';
 import { useAuthStore } from "../stores/authStore";
@@ -28,6 +29,7 @@ interface LessonPlan {
   createdAt: string;
   assignedStudents: string[];
   bookIds?: string[];
+  books?: { id: string; title: string; author?: string; cover_image_url?: string }[];
 }
 
 interface ProgressData {
@@ -39,6 +41,7 @@ interface ProgressData {
 
 const Dashboard: React.FC = () => {
   const { user } = useAuthStore();
+  const navigate = useNavigate();
   const [students, setStudents] = useState<Student[]>([]);
   const [lessonPlans, setLessonPlans] = useState<LessonPlan[]>([]);
   const [progressData, setProgressData] = useState<ProgressData[]>([]);
@@ -527,6 +530,31 @@ const Dashboard: React.FC = () => {
                               <span>{formatLevelDisplay(lesson.targetLevel)}</span>
                             </span>
                           </div>
+                          {lesson.books && lesson.books.length > 0 && (
+                            <div className="mt-4">
+                              <p className="text-sm font-medium text-gray-700 mb-2">Books in this lesson</p>
+                              <div className="space-y-2">
+                                {lesson.books.map((book) => (
+                                  <div key={book.id} className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-md px-3 py-2">
+                                    <div className="min-w-0">
+                                      <p className="text-sm text-gray-900 truncate">{book.title}</p>
+                                      {book.author && (
+                                        <p className="text-xs text-gray-500 truncate">{book.author}</p>
+                                      )}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => navigate(`/reading/${book.id}`)}
+                                        className="text-xs bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 rounded-md"
+                                      >
+                                        Read
+                                      </button>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                           {lesson.objectives && lesson.objectives.length > 0 && (
                             <div className="mt-3">
                               <p className="text-sm font-medium text-gray-700 mb-1">Learning Goals:</p>
@@ -555,7 +583,7 @@ const Dashboard: React.FC = () => {
                             Assigned
                           </span>
                           <button
-                            onClick={() => window.location.href = `/lesson-session/${lesson.id}`}
+                            onClick={() => navigate(`/lesson-session/${lesson.id}`)}
                             className="w-full bg-purple-600 hover:bg-purple-700 text-white text-sm font-medium py-2 px-4 rounded-lg transition-colors flex items-center justify-center space-x-2"
                           >
                             <BookOpen className="h-4 w-4" />
@@ -882,8 +910,8 @@ const LessonPlanForm: React.FC<LessonPlanFormProps> = ({ lesson, onSave, onCance
     description: lesson?.description || '',
     targetLevel: lesson?.targetLevel || 'beginner',
     duration: lesson?.duration || 30,
-    objectives: lesson?.objectives || [''],
-    activities: lesson?.activities || [''],
+    objectives: lesson?.objectives || [],
+    activities: lesson?.activities || [],
     assignedStudents: lesson?.assignedStudents || [],
     bookIds: lesson?.bookIds || []
   });
@@ -1041,71 +1069,7 @@ const LessonPlanForm: React.FC<LessonPlanFormProps> = ({ lesson, onSave, onCance
         </div>
       </div>
 
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Learning Objectives</label>
-        {formData.objectives.map((objective, index) => (
-          <div key={index} className="flex items-center space-x-2 mb-2">
-            <input
-              type="text"
-              value={objective}
-              onChange={(e) => updateObjective(index, e.target.value)}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="Enter learning objective"
-              required
-            />
-            {formData.objectives.length > 1 && (
-              <button
-                type="button"
-                onClick={() => removeObjective(index)}
-                className="text-red-500 hover:text-red-700"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        ))}
-        <button
-          type="button"
-          onClick={addObjective}
-          className="text-purple-600 hover:text-purple-800 text-sm flex items-center space-x-1"
-        >
-          <Plus className="h-4 w-4" />
-          <span>Add Objective</span>
-        </button>
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">Activities</label>
-        {formData.activities.map((activity, index) => (
-          <div key={index} className="flex items-center space-x-2 mb-2">
-            <input
-              type="text"
-              value={activity}
-              onChange={(e) => updateActivity(index, e.target.value)}
-              className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500"
-              placeholder="Enter activity"
-              required
-            />
-            {formData.activities.length > 1 && (
-              <button
-                type="button"
-                onClick={() => removeActivity(index)}
-                className="text-red-500 hover:text-red-700"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
-            )}
-          </div>
-        ))}
-        <button
-          type="button"
-          onClick={addActivity}
-          className="text-purple-600 hover:text-purple-800 text-sm flex items-center space-x-1"
-        >
-          <Plus className="h-4 w-4" />
-          <span>Add Activity</span>
-        </button>
-      </div>
+      {/* Learning Objectives and Activities removed per request */}
 
       {/* Book Selection */}
       <div>

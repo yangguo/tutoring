@@ -128,16 +128,49 @@ router.get('/:bookId', async (req: Request, res: Response): Promise<void> => {
   try {
     const { bookId } = req.params;
 
-    // Get book details
+    // Try to identify user (optional)
+    let userId: string | null = null;
+    let role: string | null = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.substring(7);
+        const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
+        userId = decoded.userId;
+        role = decoded.role;
+      } catch (e) {
+        // ignore invalid tokens and continue as unauthenticated
+      }
+    }
+
+    // Get book regardless of visibility first
     const { data: book, error: bookError } = await supabase
       .from('books')
       .select('*')
       .eq('id', bookId)
-      .eq('is_public', true)
       .single();
 
     if (bookError || !book) {
       res.status(404).json({ error: 'Book not found' });
+      return;
+    }
+
+    // Access control: allow if public, admin, owner, or assigned via a lesson
+    let allowed = !!book.is_public;
+    if (!allowed && role === 'admin') allowed = true;
+    if (!allowed && userId && book.uploaded_by === userId) allowed = true;
+    if (!allowed && userId) {
+      const { data: lessons } = await supabase
+        .from('lesson_plans')
+        .select('id')
+        .contains('assigned_students', [userId])
+        .contains('book_ids', [bookId])
+        .limit(1);
+      if (lessons && lessons.length > 0) allowed = true;
+    }
+
+    if (!allowed) {
+      res.status(403).json({ error: 'Access denied' });
       return;
     }
 

@@ -382,7 +382,7 @@ const ReadingSession: React.FC = () => {
     );
   }
 
-  if (!book || pages.length === 0) {
+  if (!book) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-purple-50 flex items-center justify-center">
         <div className="text-center">
@@ -395,6 +395,38 @@ const ReadingSession: React.FC = () => {
           >
             Back to Library
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // If there are no page images but we have a PDF, show embedded PDF viewer
+  const inlinePdfUrl = (book as any)?.pdf_file_url as string | undefined;
+  if (pages.length === 0 && inlinePdfUrl) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
+        <div className="bg-white shadow-sm border-b">
+          <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+            <button
+              onClick={() => navigate(-1)}
+              className="flex items-center space-x-2 text-gray-600 hover:text-gray-800 transition-colors"
+            >
+              <ArrowLeft className="h-5 w-5" />
+              <span>Back</span>
+            </button>
+            <h1 className="text-lg font-semibold text-gray-800 truncate">{book.title}</h1>
+            <div className="w-10" />
+          </div>
+        </div>
+        <div className="max-w-6xl mx-auto px-4 py-6">
+          <div className="bg-white rounded-xl shadow-lg overflow-hidden border">
+            <div className="h-[80vh]">
+              <iframe title="PDF" src={inlinePdfUrl} className="w-full h-full" />
+            </div>
+          </div>
+          <p className="text-sm text-gray-600 mt-3">
+            Tip: If the PDF doesn’t render, open it in a new tab from the Library.
+          </p>
         </div>
       </div>
     );

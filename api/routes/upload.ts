@@ -136,6 +136,77 @@ router.post('/book', authenticateToken, requireRole(['parent', 'admin']), upload
 });
 
 /**
+ * Update Book Metadata
+ * PATCH /api/upload/book/:bookId
+ */
+router.patch('/book/:bookId', authenticateToken, requireRole(['parent', 'admin']), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { bookId } = req.params;
+    const { userId, role } = (req as any).user;
+
+    // Validate allowed fields (all optional)
+    const updateSchema = Joi.object({
+      title: Joi.string().optional(),
+      description: Joi.string().allow('').optional(),
+      category: Joi.string().allow('').optional(),
+      language: Joi.string().optional(),
+      is_public: Joi.boolean().optional(),
+      target_age_min: Joi.number().integer().min(3).max(18).optional(),
+      target_age_max: Joi.number().integer().min(3).max(18).optional(),
+      difficulty_level: Joi.string().valid('beginner', 'intermediate', 'advanced').optional()
+    }).min(1);
+
+    const { error: validationError, value: updates } = updateSchema.validate(req.body, { convert: true });
+    if (validationError) {
+      res.status(400).json({ error: validationError.details[0].message });
+      return;
+    }
+
+    // Fetch book and verify ownership unless admin
+    const { data: book, error: fetchError } = await supabase
+      .from('books')
+      .select('id, uploaded_by')
+      .eq('id', bookId)
+      .single();
+
+    if (fetchError || !book) {
+      res.status(404).json({ error: 'Book not found' });
+      return;
+    }
+
+    if (role !== 'admin' && book.uploaded_by !== userId) {
+      res.status(403).json({ error: 'Permission denied' });
+      return;
+    }
+
+    // Ensure age range consistency if provided
+    if (updates.target_age_min !== undefined && updates.target_age_max !== undefined) {
+      if (updates.target_age_min > updates.target_age_max) {
+        res.status(400).json({ error: 'target_age_min cannot be greater than target_age_max' });
+        return;
+      }
+    }
+
+    const { data: updated, error: updateError } = await supabase
+      .from('books')
+      .update({ ...updates })
+      .eq('id', bookId)
+      .select('*')
+      .single();
+
+    if (updateError) {
+      res.status(500).json({ error: 'Failed to update book' });
+      return;
+    }
+
+    res.json({ message: 'Book updated', book: updated });
+  } catch (error) {
+    console.error('Update book error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
  * Upload Book Page Images
  * POST /api/upload/book/:bookId/pages
  */
