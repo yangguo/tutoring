@@ -57,6 +57,8 @@ const ReadingSession: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [convertingPdf, setConvertingPdf] = useState(false);
   const [conversionMessage, setConversionMessage] = useState<string | null>(null);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selectedVoice, setSelectedVoice] = useState<string | undefined>();
 
   useEffect(() => {
     if (bookId) {
@@ -64,6 +66,15 @@ const ReadingSession: React.FC = () => {
       fetchVocabulary();
     }
   }, [bookId]);
+
+  useEffect(() => {
+    const handleVoicesChanged = () => {
+      setVoices(speechSynthesis.getVoices());
+    };
+    speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
+    handleVoicesChanged(); // Initial load
+    return () => speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
+  }, []);
 
   // Load discussion history when component mounts
   useEffect(() => {
@@ -334,6 +345,12 @@ const ReadingSession: React.FC = () => {
       speechSynthesis.cancel();
       
       const utterance = new SpeechSynthesisUtterance(description);
+      if (selectedVoice) {
+        const voice = voices.find(v => v.voiceURI === selectedVoice);
+        if (voice) {
+          utterance.voice = voice;
+        }
+      }
       utterance.rate = 0.8;
       utterance.pitch = 1;
       utterance.volume = 1;
@@ -574,6 +591,18 @@ const ReadingSession: React.FC = () => {
                   <Volume2 className="h-4 w-4 inline mr-2" />
                   Auto-Read
                 </button>
+
+                <select
+                  value={selectedVoice}
+                  onChange={(e) => setSelectedVoice(e.target.value)}
+                  className="bg-gray-200 text-gray-700 rounded-lg px-4 py-2"
+                >
+                  {voices.map(voice => (
+                    <option key={voice.voiceURI} value={voice.voiceURI}>
+                      {voice.name} ({voice.lang})
+                    </option>
+                  ))}
+                </select>
                 
                 <button
                   onClick={() => setShowDiscussion(!showDiscussion)}
