@@ -4,24 +4,16 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Book, Search, Filter, BookOpen, Star, Clock, Users, ChevronDown } from 'lucide-react';
+import { Search, Filter, BookOpen, Star, Clock, Users, ChevronDown } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
+import { Book } from '../lib/api';
 
-interface BookData {
-  id: string;
-  title: string;
-  author: string;
-  description: string;
-  difficulty_level: string;
-  age_range: string;
-  category: string;
-  page_count: number;
-  created_at: string;
+// Extend Book interface to include optional file info from uploads
+interface BookData extends Book {
   // Optional file info from API (present for uploads)
   pdf_file_url?: string;
   file_url?: string;
   file_type?: string;
-  uploaded_by?: string;
 }
 
 interface FilterOptions {
@@ -174,25 +166,22 @@ export default function Library() {
       to={`/reading/${book.id}`}
       className="bg-white rounded-xl p-6 shadow-sm border border-gray-100 hover:shadow-lg transition-all duration-200 group"
     >
-      {/* Book Cover (click to open PDF if available) */}
+      {/* Book Cover (card click navigates to reader; explicit button previews PDF) */}
       <div
-        className={`relative aspect-[3/4] bg-gradient-to-br from-blue-100 via-purple-100 to-pink-100 rounded-lg mb-4 flex items-center justify-center group-hover:scale-105 transition-transform ${book.pdf_file_url ? 'cursor-pointer' : ''}`}
-        onClick={(e) => {
-          if (book.pdf_file_url) {
-            e.preventDefault();
-            e.stopPropagation();
-            setPdfUrl(book.pdf_file_url);
-          }
-        }}
-        role={book.pdf_file_url ? 'button' : undefined}
-        aria-label={book.pdf_file_url ? 'Open PDF preview' : 'Book cover'}
-        title={book.pdf_file_url ? 'Open PDF' : undefined}
+        className="relative aspect-[3/4] bg-gradient-to-br from-blue-100 via-purple-100 to-pink-100 rounded-lg mb-4 flex items-center justify-center group-hover:scale-105 transition-transform"
+        aria-label="Book cover"
       >
         <BookOpen className="w-12 h-12 text-blue-500" />
         {book.pdf_file_url && (
-          <span className="absolute bottom-2 right-2 text-[11px] px-2 py-1 rounded bg-white/90 text-blue-700 border border-blue-100 shadow-sm">
-            Open PDF
-          </span>
+          <button
+            type="button"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setPdfUrl(book.pdf_file_url!); }}
+            className="absolute bottom-2 right-2 text-[11px] px-2 py-1 rounded bg-white/95 text-blue-700 border border-blue-200 shadow-sm hover:bg-white"
+            aria-label="Preview PDF"
+            title="Preview PDF"
+          >
+            Preview PDF
+          </button>
         )}
       </div>
 

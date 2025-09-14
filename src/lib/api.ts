@@ -25,6 +25,7 @@ export interface Book {
   difficulty_level: 'beginner' | 'intermediate' | 'advanced';
   age_range: string;
   category: string;
+  page_count: number;
   is_public: boolean;
   uploaded_by: string;
   created_at: string;
@@ -119,9 +120,9 @@ class ApiClient {
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    const headers: HeadersInit = {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      ...options.headers,
+      ...(options.headers as Record<string, string>),
     };
 
     if (this.token) {
