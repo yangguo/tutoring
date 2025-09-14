@@ -283,7 +283,7 @@ router.post('/book/:bookId/pages', authenticateToken, requireRole(['parent', 'ad
             const openai = new OpenAI(openaiConfig);
             
             const response = await openai.chat.completions.create({
-              model: "gpt-4-vision-preview",
+              model: process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo',
               messages: [
                 {
                   role: "user",
@@ -295,7 +295,7 @@ router.post('/book/:bookId/pages', authenticateToken, requireRole(['parent', 'ad
                     {
                       type: "image_url",
                       image_url: {
-                        url: urlData.publicUrl
+                        url: `data:${file.mimetype};base64,${file.buffer.toString('base64')}`
                       }
                     }
                   ]
@@ -318,7 +318,6 @@ router.post('/book/:bookId/pages', authenticateToken, requireRole(['parent', 'ad
             book_id: bookId,
             page_number: i + 1,
             image_url: urlData.publicUrl,
-            image_path: filePath,
             image_description: imageDescription
           })
           .select()
