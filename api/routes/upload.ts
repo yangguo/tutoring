@@ -301,7 +301,7 @@ router.post('/book/:bookId/pages', authenticateToken, requireRole(['parent', 'ad
                   ]
                 }
               ],
-              max_tokens: 300
+              max_tokens: 10000
             });
             
             imageDescription = response.choices[0]?.message?.content || null;

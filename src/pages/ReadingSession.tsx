@@ -15,7 +15,8 @@ import {
   Sparkles,
   Volume1,
   Contrast,
-  MessageCircle
+  MessageCircle,
+  RefreshCw
 } from 'lucide-react';
 import { api, Book, BookPage, VocabularyWord, DiscussionMessage } from '../lib/api';
 import ChatInterface from '../components/ChatInterface';
@@ -48,6 +49,7 @@ const ReadingSession: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [showImageDescription, setShowImageDescription] = useState(false);
   const [analyzingImage, setAnalyzingImage] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
   const [imageDescriptions, setImageDescriptions] = useState<Record<string, string>>({});
   const [highContrastMode, setHighContrastMode] = useState(false);
   const [autoReadDescriptions, setAutoReadDescriptions] = useState(false);
@@ -336,6 +338,51 @@ const ReadingSession: React.FC = () => {
       toast.error('Failed to analyze image');
     } finally {
       setAnalyzingImage(false);
+    }
+  };
+
+  const regenerateDescription = async () => {
+    if (!bookId || !currentPage?.id || regenerating) return;
+
+    setRegenerating(true);
+    try {
+      const response = await fetch(`/api/books/${bookId}/pages/${currentPage.id}/regenerate-description`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      });
+
+      const data = await response.json();
+      if (response.ok) {
+        // Update the imageDescriptions state
+        setImageDescriptions(prev => ({
+          ...prev,
+          [currentPage.id]: data.description
+        }));
+
+        // Update the pages state
+        setPages(prevPages => {
+          const newPages = [...prevPages];
+          const pageIndex = newPages.findIndex(p => p.id === currentPage.id);
+          if (pageIndex !== -1) {
+            newPages[pageIndex] = {
+              ...newPages[pageIndex],
+              image_description: data.description
+            };
+          }
+          return newPages;
+        });
+
+        toast.success('Description regenerated successfully!');
+      } else {
+        throw new Error(data.error || 'Failed to regenerate description');
+      }
+    } catch (error) {
+      console.error('Error regenerating description:', error);
+      toast.error(error.message);
+    } finally {
+      setRegenerating(false);
     }
   };
 
@@ -732,9 +779,23 @@ const ReadingSession: React.FC = () => {
                           highContrastMode ? 'text-blue-300' : 'text-blue-500'
                         }`} />
                         <div>
-                          <h4 className={`font-medium mb-2 ${
-                            highContrastMode ? 'text-white' : 'text-blue-800'
-                          }`}>AI Image Description</h4>
+                          <div className="flex items-center justify-between">
+                            <h4 className={`font-medium mb-2 ${
+                              highContrastMode ? 'text-white' : 'text-blue-800'
+                            }`}>AI Image Description</h4>
+                            <button
+                              onClick={regenerateDescription}
+                              disabled={regenerating}
+                              className="p-1 rounded-full bg-blue-500 text-white shadow-lg hover:bg-blue-600 transition-colors disabled:opacity-50"
+                              title="Regenerate description"
+                            >
+                              {regenerating ? (
+                                <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                              ) : (
+                                <RefreshCw className="h-4 w-4" />
+                              )}
+                            </button>
+                          </div>
                           <p className={`text-sm leading-relaxed ${
                             highContrastMode ? 'text-gray-100' : 'text-blue-700'
                           }`}

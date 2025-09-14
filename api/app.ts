@@ -15,6 +15,7 @@ import booksRoutes from './routes/books.js';
 import achievementsRoutes from './routes/achievements.js';
 import dashboardRoutes from './routes/dashboard.js';
 import chatRoutes from './routes/chat.js';
+import regenerateRoutes from './routes/regenerate.js';
 import { runAllChecks } from './utils/health.js';
 
 // for esm mode
@@ -53,6 +54,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/books', booksRoutes);
+app.use('/api/books', regenerateRoutes);
 app.use('/api/achievements', achievementsRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/chat', chatRoutes);

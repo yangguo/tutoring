@@ -6,7 +6,7 @@ import { Router, type Request, type Response } from 'express';
 import Joi from 'joi';
 import jwt from 'jsonwebtoken';
 import { supabase } from '../config/supabase';
-import { authenticateToken, requireRole, requireChildAccess } from '../utils/jwt';
+import { authenticateToken, requireRole, canAccessChildData } from '../utils/jwt';
 
 const router = Router();
 
@@ -579,29 +579,38 @@ router.post('/evaluate-pronunciation', authenticateToken, async (req: Request, r
         return;
       }
 
-      openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an English pronunciation tutor. Analyze the spoken text compared to the target text and provide detailed feedback. Return a JSON response with pronunciation_score (0-100), fluency_score (0-100), accuracy_score (0-100), and suggestions array.'
-            },
-            {
-              role: 'user',
-              content: `Target text: "${targetText}"\nSpoken text: "${transcript}"\nSpeech recognition confidence: ${confidence || 0.8}\n\nPlease evaluate the pronunciation, fluency, and accuracy. Provide specific suggestions for improvement.`
-            }
-          ],
-          max_tokens: 500,
-          temperature: 0.3
-        }),
-        timeout: 10000 // 10 second timeout
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      try {
+        openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: process.env.OPENAI_MODEL || 'gpt-3.5-turbo',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are an English pronunciation tutor. Analyze the spoken text compared to the target text and provide detailed feedback. Return a JSON response with pronunciation_score (0-100), fluency_score (0-100), accuracy_score (0-100), and suggestions array.'
+              },
+              {
+                role: 'user',
+                content: `Target text: "${targetText}"\nSpoken text: "${transcript}"\nSpeech recognition confidence: ${confidence || 0.8}\n\nPlease evaluate the pronunciation, fluency, and accuracy. Provide specific suggestions for improvement.`
+              }
+            ],
+            max_tokens: 500,
+            temperature: 0.3
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+      } catch (abortError) {
+        clearTimeout(timeoutId);
+        throw abortError;
+      }
     } catch (fetchError) {
       console.error('OpenAI API fetch error:', fetchError);
       // Fallback to basic evaluation on network error
@@ -711,41 +720,50 @@ router.post('/analyze-image', authenticateToken, async (req: Request, res: Respo
         return;
       }
 
-      openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'gpt-4-vision-preview',
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an educational assistant for children learning English. Analyze the image and provide an age-appropriate, educational description. Also extract 3-5 key vocabulary words that children can learn from this image. Return a JSON response with "description" (string) and "vocabulary" (array of objects with "word", "definition", and "difficulty_level" fields).'
-            },
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'text',
-                  text: `Please analyze this image from a children's book. Context: ${context || 'General children\'s book illustration'}. Provide an educational description suitable for children aged 3-12, and identify key vocabulary words they can learn.`
-                },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: image_url,
-                    detail: 'high'
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for vision API
+      
+      try {
+        openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: 'gpt-4-vision-preview',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are an educational assistant for children learning English. Analyze the image and provide an age-appropriate, educational description. Also extract 3-5 key vocabulary words that children can learn from this image. Return a JSON response with "description" (string) and "vocabulary" (array of objects with "word", "definition", and "difficulty_level" fields).'
+              },
+              {
+                role: 'user',
+                content: [
+                  {
+                    type: 'text',
+                    text: `Please analyze this image from a children's book. Context: ${context || 'General children\'s book illustration'}. Provide an educational description suitable for children aged 3-12, and identify key vocabulary words they can learn.`
+                  },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: image_url,
+                      detail: 'high'
+                    }
                   }
-                }
-              ]
-            }
-          ],
-          max_tokens: 800,
-          temperature: 0.3
-        }),
-        timeout: 15000 // 15 second timeout for vision API
-      });
+                ]
+              }
+            ],
+            max_tokens: 800,
+            temperature: 0.3
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+      } catch (abortError) {
+        clearTimeout(timeoutId);
+        throw abortError;
+      }
     } catch (fetchError) {
       console.error('OpenAI Vision API fetch error:', fetchError);
       // Fallback to basic description on network error
@@ -923,29 +941,39 @@ router.post('/extract-vocabulary', authenticateToken, async (req: Request, res: 
         extractedVocabulary = extractBasicVocabulary(description, difficulty_level, max_words);
       } else {
         // Use OpenAI for intelligent vocabulary extraction
-        const openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'gpt-4',
-            messages: [
-              {
-                role: 'system',
-                content: `You are an educational assistant for children learning English. Extract ${max_words} key vocabulary words from the given description that are appropriate for ${difficulty_level} level learners. Return a JSON array of objects with "word", "definition", "difficulty_level", "part_of_speech", and "example_sentence" fields.`
-              },
-              {
-                role: 'user',
-                content: `Extract educational vocabulary from this description: "${description}". Focus on words that children can learn and use in their daily conversations.`
-              }
-            ],
-            max_tokens: 500,
-            temperature: 0.3
-          }),
-          timeout: 10000
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        
+        let openaiResponse;
+        try {
+          openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: 'gpt-4',
+              messages: [
+                {
+                  role: 'system',
+                  content: `You are an educational assistant for children learning English. Extract ${max_words} key vocabulary words from the given description that are appropriate for ${difficulty_level} level learners. Return a JSON array of objects with "word", "definition", "difficulty_level", "part_of_speech", and "example_sentence" fields.`
+                },
+                {
+                  role: 'user',
+                  content: `Extract educational vocabulary from this description: "${description}". Focus on words that children can learn and use in their daily conversations.`
+                }
+              ],
+              max_tokens: 500,
+              temperature: 0.3
+            }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+        } catch (abortError) {
+          clearTimeout(timeoutId);
+          throw abortError;
+        }
 
         if (openaiResponse.ok) {
           const openaiResult = await openaiResponse.json();
@@ -1104,20 +1132,30 @@ router.post('/discuss', authenticateToken, async (req: Request, res: Response): 
           }
         ];
 
-        const openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: process.env.OPENAI_MODEL || 'gpt-4',
-            messages,
-            max_tokens: 300,
-            temperature: 0.7
-          }),
-          timeout: 15000
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        
+        let openaiResponse;
+        try {
+          openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: process.env.OPENAI_MODEL || 'gpt-4',
+              messages,
+              max_tokens: 300,
+              temperature: 0.7
+            }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+        } catch (abortError) {
+          clearTimeout(timeoutId);
+          throw abortError;
+        }
 
         if (openaiResponse.ok) {
           const openaiResult = await openaiResponse.json();
