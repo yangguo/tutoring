@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mic, MicOff, Play, Pause, RotateCcw, CheckCircle, XCircle, ArrowLeft, Volume2 } from 'lucide-react';
+import { Mic, MicOff, Play, Pause, RotateCcw, CheckCircle, XCircle, ArrowLeft, Volume2, MessageCircle, ChevronLeft, ChevronRight, BookOpen, Send, Clock } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../lib/api';
-import type { Book } from '../lib/api';
+import type { Book, BookPage, DiscussionMessage } from '../lib/api';
 
 // TypeScript declarations for SpeechRecognition
 declare global {
@@ -45,6 +45,8 @@ const SpeakingPractice: React.FC = () => {
   const navigate = useNavigate();
   const [books, setBooks] = useState<Book[]>([]);
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
+  const [bookPages, setBookPages] = useState<BookPage[]>([]);
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
   const [currentText, setCurrentText] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -66,6 +68,13 @@ const SpeakingPractice: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [sessionHistory, setSessionHistory] = useState<any[]>([]);
   
+  // Chat functionality
+  const [chatMessages, setChatMessages] = useState<DiscussionMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatMode, setIsChatMode] = useState(false);
+  const [isVoiceMode, setIsVoiceMode] = useState(false);
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+  
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -77,15 +86,350 @@ const SpeakingPractice: React.FC = () => {
     setCurrentText(practiceTexts[0]);
   }, []);
 
-  const fetchBooks = async () => {
+  const fetchBooks = async (retryCount = 0) => {
     try {
       const response = await api.getBooks();
       setBooks(response.books || []);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error fetching books:', error);
+      
+      // Handle rate limiting with retry
+      if (error.message === 'Network error' && retryCount < 3) {
+        const delay = Math.pow(2, retryCount) * 1000; // Exponential backoff
+        console.log(`Rate limited, retrying in ${delay}ms...`);
+        setTimeout(() => fetchBooks(retryCount + 1), delay);
+        return;
+      }
+      
       toast.error('Failed to load books');
     } finally {
-      setLoading(false);
+      if (retryCount === 0) {
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleBookSelection = async (book: Book) => {
+    try {
+      setSelectedBook(book);
+      setCurrentPageIndex(0);
+      setChatMessages([]);
+      
+      console.log('Selecting book:', book.title, 'ID:', book.id);
+      
+      // Fetch book details with pages
+      const bookDetails = await api.getBook(book.id);
+      console.log('Book details received:', bookDetails);
+      
+      if (bookDetails.book.pages && bookDetails.book.pages.length > 0) {
+        console.log('Found', bookDetails.book.pages.length, 'pages for book');
+        setBookPages(bookDetails.book.pages);
+        const firstPage = bookDetails.book.pages[0];
+        console.log('First page:', firstPage);
+        setCurrentText(firstPage.text_content || firstPage.image_description || book.description || '');
+      } else {
+        console.log('No pages found for book, using description');
+        setBookPages([]);
+        setCurrentText(book.description || '');
+      }
+      
+      setIsChatMode(true);
+      toast.success(`Selected "${book.title}" for discussion`);
+    } catch (error) {
+      console.error('Error loading book details:', error);
+      toast.error('Failed to load book details');
+    }
+  };
+
+  const navigateToPage = (direction: 'prev' | 'next') => {
+    if (!bookPages.length) return;
+    
+    let newIndex = currentPageIndex;
+    if (direction === 'prev' && currentPageIndex > 0) {
+      newIndex = currentPageIndex - 1;
+    } else if (direction === 'next' && currentPageIndex < bookPages.length - 1) {
+      newIndex = currentPageIndex + 1;
+    }
+    
+    if (newIndex !== currentPageIndex) {
+      setCurrentPageIndex(newIndex);
+      const page = bookPages[newIndex];
+      setCurrentText(page.text_content || page.image_description || '');
+      setTranscript('');
+      setFeedback(null);
+    }
+  };
+
+  const sendChatMessage = async () => {
+    if (!chatInput.trim() || !selectedBook || isSendingMessage) return;
+    
+    const userMessage: DiscussionMessage = {
+      id: Date.now().toString(),
+      type: 'user',
+      content: chatInput.trim(),
+      timestamp: new Date().toISOString(),
+      page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
+    };
+    
+    setChatMessages(prev => [...prev, userMessage]);
+    setChatInput('');
+    setIsSendingMessage(true);
+    
+    try {
+      // Create context for the AI
+      const currentPage = bookPages[currentPageIndex];
+      const context = {
+        book: {
+          title: selectedBook.title,
+          author: selectedBook.author,
+          description: selectedBook.description || '',
+          difficulty_level: selectedBook.difficulty_level,
+          target_age: selectedBook.age_range,
+          page_count: selectedBook.page_count
+        },
+        lesson: {
+          title: `Book Discussion: ${selectedBook.title}`,
+          description: `Interactive discussion about "${selectedBook.title}" by ${selectedBook.author}`,
+          objectives: [
+            'Understand the story and characters',
+            'Improve reading comprehension',
+            'Practice verbal communication',
+            'Develop critical thinking skills'
+          ],
+          activities: [
+            'Page-by-page discussion',
+            'Character analysis',
+            'Theme exploration',
+            'Vocabulary building'
+          ],
+          target_level: selectedBook.difficulty_level,
+          duration: 30
+        },
+        currentPage: currentPage ? {
+          number: currentPageIndex + 1,
+          text: currentPage.text_content || '',
+          description: currentPage.image_description || '',
+          image_url: currentPage.image_url || ''
+        } : null
+      };
+      
+      const response = await fetch('/api/chat/lesson', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({
+          message: userMessage.content,
+          history: chatMessages.map(msg => ({
+            role: msg.type === 'user' ? 'user' : 'assistant',
+            content: msg.content
+          })),
+          context
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to get AI response');
+      }
+      
+      const data = await response.json();
+      
+      const aiMessage: DiscussionMessage = {
+        id: (Date.now() + 1).toString(),
+        type: 'ai',
+        content: data.response || 'I\'m here to help you discuss this book! What would you like to talk about?',
+        timestamp: new Date().toISOString(),
+        page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
+      };
+      
+      setChatMessages(prev => [...prev, aiMessage]);
+    } catch (error) {
+      console.error('Error sending chat message:', error);
+      toast.error('Failed to send message');
+      
+      // Fallback AI response
+      const fallbackMessage: DiscussionMessage = {
+        id: (Date.now() + 1).toString(),
+        type: 'ai',
+        content: `That's an interesting point about "${selectedBook?.title}"! I'd love to discuss this further. What specific aspect of ${bookPages.length > 0 ? `page ${currentPageIndex + 1}` : 'the book'} would you like to explore?`,
+        timestamp: new Date().toISOString(),
+        page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
+      };
+      
+      setChatMessages(prev => [...prev, fallbackMessage]);
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
+  const handleVoiceChat = () => {
+    if (isVoiceMode) {
+      // Stop voice mode
+      setIsVoiceMode(false);
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    } else {
+      // Start voice mode for chat
+      setIsVoiceMode(true);
+      if (recognitionRef.current) {
+        // Configure recognition for chat mode
+        recognitionRef.current.continuous = false;
+        recognitionRef.current.interimResults = false;
+        recognitionRef.current.lang = 'en-US';
+        
+        recognitionRef.current.onresult = (event: any) => {
+          const result = event.results[0][0];
+          const transcript = result.transcript.trim();
+          
+          if (transcript) {
+            setChatInput(transcript);
+            setIsVoiceMode(false);
+            
+            // Auto-send the voice message after a short delay
+            setTimeout(() => {
+              if (transcript && !isSendingMessage) {
+                sendVoiceMessage(transcript);
+              }
+            }, 500);
+          }
+        };
+        
+        recognitionRef.current.onerror = (event: any) => {
+          console.error('Speech recognition error:', event.error);
+          setIsVoiceMode(false);
+          toast.error('Voice recognition failed. Please try again.');
+        };
+        
+        recognitionRef.current.onend = () => {
+          setIsVoiceMode(false);
+        };
+        
+        try {
+          recognitionRef.current.start();
+          toast.success('Listening... Speak your message!');
+        } catch (error) {
+          console.error('Failed to start voice recognition:', error);
+          setIsVoiceMode(false);
+          toast.error('Failed to start voice recognition');
+        }
+      } else {
+        toast.error('Voice recognition not supported in this browser');
+      }
+    }
+  };
+  
+  const sendVoiceMessage = async (transcript: string) => {
+    if (!transcript.trim() || !selectedBook || isSendingMessage) return;
+    
+    const userMessage: DiscussionMessage = {
+      id: Date.now().toString(),
+      type: 'user',
+      content: transcript,
+      timestamp: new Date().toISOString(),
+      page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
+    };
+    
+    setChatMessages(prev => [...prev, userMessage]);
+    setChatInput('');
+    setIsSendingMessage(true);
+    
+    try {
+      // Create context for the AI
+      const currentPage = bookPages[currentPageIndex];
+      const context = {
+        book: {
+          title: selectedBook.title,
+          author: selectedBook.author,
+          description: selectedBook.description || '',
+          difficulty_level: selectedBook.difficulty_level,
+          target_age: selectedBook.age_range,
+          page_count: selectedBook.page_count
+        },
+        lesson: {
+          title: `Book Discussion: ${selectedBook.title}`,
+          description: `Interactive discussion about "${selectedBook.title}" by ${selectedBook.author}`,
+          objectives: [
+            'Understand the story and characters',
+            'Improve reading comprehension',
+            'Practice verbal communication',
+            'Develop critical thinking skills'
+          ],
+          activities: [
+            'Page-by-page discussion',
+            'Character analysis',
+            'Theme exploration',
+            'Vocabulary building'
+          ],
+          target_level: selectedBook.difficulty_level,
+          duration: 30
+        },
+        currentPage: currentPage ? {
+          number: currentPageIndex + 1,
+          text: currentPage.text_content || '',
+          description: currentPage.image_description || '',
+          image_url: currentPage.image_url || ''
+        } : null
+      };
+      
+      const response = await fetch('/api/chat/lesson', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        },
+        body: JSON.stringify({
+          message: userMessage.content,
+          history: chatMessages.map(msg => ({
+            role: msg.type === 'user' ? 'user' : 'assistant',
+            content: msg.content
+          })),
+          context
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to get AI response');
+      }
+      
+      const data = await response.json();
+      
+      const aiMessage: DiscussionMessage = {
+        id: (Date.now() + 1).toString(),
+        type: 'ai',
+        content: data.response || 'I\'m here to help you discuss this book! What would you like to talk about?',
+        timestamp: new Date().toISOString(),
+        page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
+      };
+      
+      setChatMessages(prev => [...prev, aiMessage]);
+      
+      // Read the AI response aloud
+      if ('speechSynthesis' in window) {
+        const utterance = new SpeechSynthesisUtterance(aiMessage.content);
+        utterance.rate = 0.8;
+        utterance.pitch = 1;
+        utterance.volume = 0.8;
+        speechSynthesis.speak(utterance);
+      }
+      
+    } catch (error) {
+      console.error('Error sending voice message:', error);
+      toast.error('Failed to send voice message');
+      
+      // Fallback AI response
+      const fallbackMessage: DiscussionMessage = {
+        id: (Date.now() + 1).toString(),
+        type: 'ai',
+        content: `That's an interesting point about "${selectedBook?.title}"! I'd love to discuss this further. What specific aspect of ${bookPages.length > 0 ? `page ${currentPageIndex + 1}` : 'the book'} would you like to explore?`,
+        timestamp: new Date().toISOString(),
+        page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
+      };
+      
+      setChatMessages(prev => [...prev, fallbackMessage]);
+    } finally {
+      setIsSendingMessage(false);
     }
   };
 
@@ -200,8 +544,6 @@ const SpeakingPractice: React.FC = () => {
     }
   };
 
-
-
   const saveSpeakingSession = async (scores: any) => {
     try {
       const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
@@ -304,216 +646,406 @@ const SpeakingPractice: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
           {/* Main Practice Area */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Text Selection */}
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Choose Practice Text</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Book Selection */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">From Books</label>
-                  <select
-                    value={selectedBook?.id || ''}
-                    onChange={(e) => {
-                      const book = books.find(b => b.id === e.target.value);
-                      setSelectedBook(book || null);
-                      if (book) {
-                        setCurrentText(book.description || practiceTexts[0]);
-                      }
-                    }}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                  >
-                    <option value="">Select a book...</option>
-                    {books.map((book) => (
-                      <option key={book.id} value={book.id}>{book.title}</option>
-                    ))}
-                  </select>
-                </div>
-                
-                {/* Practice Texts */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Practice Sentences</label>
-                  <select
-                    value={selectedTextIndex}
-                    onChange={(e) => {
-                      const index = parseInt(e.target.value);
-                      setSelectedTextIndex(index);
-                      setCurrentText(practiceTexts[index]);
-                      setSelectedBook(null);
-                    }}
-                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                  >
-                    {practiceTexts.map((text, index) => (
-                      <option key={index} value={index}>
-                        {text.substring(0, 30)}...
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* Target Text Display */}
+            {/* Mode Selection */}
             <div className="bg-white rounded-xl shadow-lg p-6">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-xl font-semibold text-gray-800">Target Text</h2>
-                <button
-                  onClick={playTargetAudio}
-                  disabled={isPlaying}
-                  className="flex items-center space-x-2 bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:bg-gray-400 transition-colors"
-                >
-                  {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                  <span>{isPlaying ? 'Playing...' : 'Listen'}</span>
-                  <Volume2 className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="bg-gray-50 rounded-lg p-4">
-                <p className="text-lg leading-relaxed text-gray-800">{currentText}</p>
-              </div>
-            </div>
-
-            {/* Recording Controls */}
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h2 className="text-xl font-semibold text-gray-800 mb-4">Your Recording</h2>
-              <div className="text-center space-y-4">
-                <div className="flex justify-center space-x-4">
+                <h2 className="text-xl font-semibold text-gray-800">Practice Mode</h2>
+                <div className="flex space-x-2">
                   <button
-                    onClick={isRecording ? stopRecording : startRecording}
-                    className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-colors ${
-                      isRecording
-                        ? 'bg-red-500 text-white hover:bg-red-600'
-                        : 'bg-green-500 text-white hover:bg-green-600'
+                    onClick={() => setIsChatMode(false)}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      !isChatMode
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                     }`}
                   >
-                    {isRecording ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
-                    <span>{isRecording ? 'Stop Recording' : 'Start Recording'}</span>
+                    Speaking Practice
                   </button>
                   <button
-                    onClick={resetPractice}
-                    className="flex items-center space-x-2 bg-gray-500 text-white px-6 py-3 rounded-lg hover:bg-gray-600 transition-colors"
+                    onClick={() => setIsChatMode(true)}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                      isChatMode
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
                   >
-                    <RotateCcw className="h-5 w-5" />
-                    <span>Reset</span>
+                    Book Discussion
                   </button>
                 </div>
-                
-                {isRecording && (
-                  <div className="flex items-center justify-center space-x-2">
-                    <div className="animate-pulse bg-red-500 rounded-full h-3 w-3"></div>
-                    <span className="text-red-600 font-medium">Recording...</span>
-                  </div>
-                )}
               </div>
             </div>
 
-            {/* Transcript */}
-            {transcript && (
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <h2 className="text-xl font-semibold text-gray-800 mb-4">What You Said</h2>
-                <div className="bg-blue-50 rounded-lg p-4">
-                  <p className="text-lg text-gray-800">{transcript}</p>
-                </div>
-              </div>
-            )}
-
-            {/* Feedback */}
-            {feedback && (
-              <div className="bg-white rounded-xl shadow-lg p-6">
-                <h2 className="text-xl font-semibold text-gray-800 mb-4">Pronunciation Feedback</h2>
-                <div className="grid grid-cols-3 gap-4 mb-6">
-                  <div className="text-center">
-                    <div className="flex items-center justify-center mb-2">
-                      {getScoreIcon(feedback.pronunciation)}
-                    </div>
-                    <div className={`text-2xl font-bold ${getScoreColor(feedback.pronunciation)}`}>
-                      {feedback.pronunciation}%
-                    </div>
-                    <div className="text-sm text-gray-600">Pronunciation</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="flex items-center justify-center mb-2">
-                      {getScoreIcon(feedback.fluency)}
-                    </div>
-                    <div className={`text-2xl font-bold ${getScoreColor(feedback.fluency)}`}>
-                      {feedback.fluency}%
-                    </div>
-                    <div className="text-sm text-gray-600">Fluency</div>
-                  </div>
-                  <div className="text-center">
-                    <div className="flex items-center justify-center mb-2">
-                      {getScoreIcon(feedback.accuracy)}
-                    </div>
-                    <div className={`text-2xl font-bold ${getScoreColor(feedback.accuracy)}`}>
-                      {feedback.accuracy}%
-                    </div>
-                    <div className="text-sm text-gray-600">Accuracy</div>
-                  </div>
-                </div>
-                <div className="bg-yellow-50 rounded-lg p-4">
-                  <h3 className="font-medium text-gray-800 mb-2">Suggestions:</h3>
-                  <ul className="space-y-1">
-                    {feedback.suggestions.map((suggestion, index) => (
-                      <li key={index} className="text-sm text-gray-700">• {suggestion}</li>
-                    ))}
-                  </ul>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Sidebar */}
-          <div className="space-y-6">
-            {/* Session History */}
+            {/* Book Selection */}
             <div className="bg-white rounded-xl shadow-lg p-6">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">Recent Sessions</h3>
-              <div className="space-y-3">
-                {sessionHistory.length === 0 ? (
-                  <p className="text-gray-500 text-sm">No sessions yet. Start practicing!</p>
-                ) : (
-                  sessionHistory.map((session) => (
-                    <div key={session.id} className="border rounded-lg p-3">
-                      <div className="text-xs text-gray-500 mb-1">{session.timestamp}</div>
-                      <div className="text-sm text-gray-700 mb-2 truncate">{session.text}</div>
-                      <div className="flex justify-between text-xs">
-                        <span className={getScoreColor(session.scores.pronunciation)}>P: {session.scores.pronunciation}%</span>
-                        <span className={getScoreColor(session.scores.fluency)}>F: {session.scores.fluency}%</span>
-                        <span className={getScoreColor(session.scores.accuracy)}>A: {session.scores.accuracy}%</span>
+              <h2 className="text-xl font-semibold text-gray-800 mb-4">
+                {isChatMode ? 'Select Book for Discussion' : 'Choose Practice Text'}
+              </h2>
+              
+              {isChatMode ? (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {books.map((book) => (
+                      <div
+                        key={book.id}
+                        onClick={() => handleBookSelection(book)}
+                        className={`p-4 border rounded-lg cursor-pointer transition-all hover:shadow-md ${
+                          selectedBook?.id === book.id
+                            ? 'border-purple-500 bg-purple-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="flex items-start space-x-3">
+                          <BookOpen className="w-8 h-8 text-purple-600 mt-1" />
+                          <div className="flex-1 min-w-0">
+                            <h3 className="font-medium text-gray-900 truncate">{book.title}</h3>
+                            <p className="text-sm text-gray-600 truncate">by {book.author}</p>
+                            <div className="flex items-center space-x-2 mt-2">
+                              <span className={`px-2 py-1 text-xs rounded-full ${
+                                book.difficulty_level === 'beginner' ? 'bg-green-100 text-green-800' :
+                                book.difficulty_level === 'intermediate' ? 'bg-yellow-100 text-yellow-800' :
+                                'bg-red-100 text-red-800'
+                              }`}>
+                                {book.difficulty_level}
+                              </span>
+                              <span className="text-xs text-gray-500">{book.page_count} pages</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  {selectedBook && (
+                    <div className="p-4 bg-gray-50 rounded-lg">
+                      {bookPages.length > 0 ? (
+                        <div>
+                          <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center space-x-4">
+                              <button
+                                onClick={() => navigateToPage('prev')}
+                                disabled={currentPageIndex === 0}
+                                className="p-2 rounded-md bg-white border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 transition-colors"
+                              >
+                                <ChevronLeft className="w-4 h-4" />
+                              </button>
+                              <span className="text-sm font-medium text-gray-700">
+                                Page {currentPageIndex + 1} of {bookPages.length}
+                              </span>
+                              <button
+                                onClick={() => navigateToPage('next')}
+                                disabled={currentPageIndex === bookPages.length - 1}
+                                className="p-2 rounded-md bg-white border border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 transition-colors"
+                              >
+                                <ChevronRight className="w-4 h-4" />
+                              </button>
+                            </div>
+                            <div className="text-sm text-gray-600">
+                              Discussing: {selectedBook.title}
+                            </div>
+                          </div>
+                          
+                          {/* Book Page Image Display */}
+                          {bookPages[currentPageIndex]?.image_url && (
+                            <div className="bg-white rounded-lg p-4 mb-4">
+                              <img
+                                src={bookPages[currentPageIndex].image_url}
+                                alt={`Page ${currentPageIndex + 1} of ${selectedBook.title}`}
+                                className="w-full h-64 object-contain rounded-lg border"
+                                onError={(e) => {
+                                  console.error('Failed to load image:', bookPages[currentPageIndex].image_url);
+                                  e.currentTarget.style.display = 'none';
+                                }}
+                              />
+                            </div>
+                          )}
+                          
+                          {/* Page Text Content */}
+                          {currentText && (
+                            <div className="bg-white rounded-lg p-4">
+                              <p className="text-gray-800 leading-relaxed">{currentText}</p>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-center">
+                          <div className="text-sm text-gray-600 mb-2">
+                            Discussing: {selectedBook.title}
+                          </div>
+                          <div className="text-xs text-amber-600 bg-amber-50 px-3 py-1 rounded-full inline-block">
+                            No pages available - using book description
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Speaking Practice Mode */
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-4">Practice Text</h3>
+                  <div className="bg-gray-50 rounded-lg p-4 mb-6">
+                    <p className="text-gray-800 leading-relaxed text-lg">
+                      {practiceTexts[selectedTextIndex]}
+                    </p>
+                  </div>
+                  
+                  <div className="flex items-center justify-center space-x-4 mb-6">
+                    <button
+                      onClick={playTargetAudio}
+                      disabled={isPlaying}
+                      className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                    >
+                      {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                      <span>{isPlaying ? 'Playing...' : 'Listen'}</span>
+                    </button>
+                    
+                    <button
+                      onClick={isRecording ? stopRecording : startRecording}
+                      className={`flex items-center space-x-2 px-6 py-3 rounded-lg font-medium transition-colors ${
+                        isRecording
+                          ? 'bg-red-600 text-white hover:bg-red-700'
+                          : 'bg-purple-600 text-white hover:bg-purple-700'
+                      }`}
+                    >
+                      {isRecording ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                      <span>{isRecording ? 'Stop Recording' : 'Start Recording'}</span>
+                    </button>
+                    
+                    <button
+                      onClick={resetPractice}
+                      className="flex items-center space-x-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-colors"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Reset</span>
+                    </button>
+                  </div>
+                  
+                  {transcript && (
+                    <div className="bg-white rounded-xl shadow-lg p-6 mb-6">
+                      <h3 className="text-lg font-semibold text-gray-800 mb-4">Your Recording</h3>
+                      <div className="bg-gray-50 rounded-lg p-4 mb-4">
+                        <p className="text-gray-800 leading-relaxed">{transcript}</p>
+                      </div>
+                      
+                      <div className="flex justify-center">
+                        <button
+                          onClick={evaluatePronunciation}
+                          className="flex items-center space-x-2 bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700 transition-colors"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          <span>Evaluate Pronunciation</span>
+                        </button>
                       </div>
                     </div>
-                  ))
+                  )}
+                  
+                  {feedback && (
+                    <div className="bg-white rounded-xl shadow-lg p-6">
+                      <h3 className="text-lg font-semibold text-gray-800 mb-4">Pronunciation Feedback</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div className="text-center p-4 bg-purple-50 rounded-lg">
+                          <div className="flex items-center justify-center mb-2">
+                            {getScoreIcon(feedback.pronunciation)}
+                          </div>
+                          <div className="text-2xl font-bold text-purple-600 mb-1">
+                            {feedback.pronunciation}%
+                          </div>
+                          <div className="text-sm text-gray-600">Pronunciation</div>
+                        </div>
+                        <div className="text-center p-4 bg-blue-50 rounded-lg">
+                          <div className="flex items-center justify-center mb-2">
+                            {getScoreIcon(feedback.fluency)}
+                          </div>
+                          <div className="text-2xl font-bold text-blue-600 mb-1">
+                            {feedback.fluency}%
+                          </div>
+                          <div className="text-sm text-gray-600">Fluency</div>
+                        </div>
+                        <div className="text-center p-4 bg-green-50 rounded-lg">
+                          <div className="flex items-center justify-center mb-2">
+                            {getScoreIcon(feedback.accuracy)}
+                          </div>
+                          <div className="text-2xl font-bold text-green-600 mb-1">
+                            {feedback.accuracy}%
+                          </div>
+                          <div className="text-sm text-gray-600">Accuracy</div>
+                        </div>
+                      </div>
+                      
+                      {feedback.suggestions.length > 0 && (
+                        <div>
+                          <h4 className="font-medium text-gray-800 mb-3">Suggestions for Improvement:</h4>
+                          <ul className="space-y-2">
+                            {feedback.suggestions.map((suggestion, index) => (
+                              <li key={index} className="flex items-start space-x-2">
+                                <div className="bg-yellow-100 rounded-full p-1 mt-0.5">
+                                  <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
+                                </div>
+                                <span className="text-sm text-gray-700">{suggestion}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      
+                      <div className="mt-6">
+                        <button
+                          onClick={() => saveSpeakingSession({
+                            pronunciation: feedback.pronunciation,
+                            fluency: feedback.fluency,
+                            accuracy: feedback.accuracy
+                          })}
+                          className="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700 transition-colors"
+                        >
+                          Save Session
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* Sidebar */}
+          <div className="space-y-6">
+            {isChatMode ? (
+              <>
+                {/* Reading Progress */}
+                {selectedBook && bookPages.length > 0 && (
+                  <div className="bg-white rounded-xl shadow-lg p-6">
+                    <h3 className="text-lg font-semibold text-gray-800 mb-4">Reading Progress</h3>
+                    <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-gray-700">{selectedBook.title}</span>
+                        <span className="text-xs text-gray-500">
+                          {Math.round(((currentPageIndex + 1) / bookPages.length) * 100)}%
+                        </span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
+                        <div 
+                          className="bg-gradient-to-r from-purple-500 to-blue-500 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${((currentPageIndex + 1) / bookPages.length) * 100}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-xs text-gray-600">
+                        Page {currentPageIndex + 1} of {bookPages.length}
+                      </p>
+                    </div>
+                  </div>
                 )}
-              </div>
-            </div>
-
-            {/* Tips */}
-            <div className="bg-white rounded-xl shadow-lg p-6">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">Speaking Tips</h3>
-              <div className="space-y-3 text-sm text-gray-600">
-                <div className="flex items-start space-x-2">
-                  <div className="bg-purple-100 rounded-full p-1 mt-0.5">
-                    <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                
+                {/* Discussion Stats */}
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-4">Discussion Stats</h3>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between p-3 bg-purple-50 rounded-lg">
+                      <div className="flex items-center space-x-2">
+                        <MessageCircle className="w-4 h-4 text-purple-600" />
+                        <span className="text-sm font-medium text-purple-800">Messages</span>
+                      </div>
+                      <span className="text-sm font-bold text-purple-600">{chatMessages.length}</span>
+                    </div>
+                    
+                    <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+                      <div className="flex items-center space-x-2">
+                        <Clock className="w-4 h-4 text-blue-600" />
+                        <span className="text-sm font-medium text-blue-800">Session Time</span>
+                      </div>
+                      <span className="text-sm font-bold text-blue-600">
+                        {chatMessages.length > 0 ? Math.floor((Date.now() - new Date(chatMessages[0].timestamp).getTime()) / 60000) : 0}min
+                      </span>
+                    </div>
                   </div>
-                  <p>Speak clearly and at a moderate pace</p>
                 </div>
-                <div className="flex items-start space-x-2">
-                  <div className="bg-purple-100 rounded-full p-1 mt-0.5">
-                    <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                
+                {/* Discussion Tips */}
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-4">Discussion Tips</h3>
+                  <div className="space-y-3 text-sm text-gray-600">
+                    <div className="flex items-start space-x-2">
+                      <div className="bg-green-100 rounded-full p-1 mt-0.5">
+                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                      </div>
+                      <p>Ask questions about characters and plot</p>
+                    </div>
+                    <div className="flex items-start space-x-2">
+                      <div className="bg-yellow-100 rounded-full p-1 mt-0.5">
+                        <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
+                      </div>
+                      <p>Share your thoughts and predictions</p>
+                    </div>
+                    <div className="flex items-start space-x-2">
+                      <div className="bg-blue-100 rounded-full p-1 mt-0.5">
+                        <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                      </div>
+                      <p>Discuss themes and deeper meanings</p>
+                    </div>
+                    <div className="flex items-start space-x-2">
+                      <div className="bg-indigo-100 rounded-full p-1 mt-0.5">
+                        <div className="w-2 h-2 bg-indigo-500 rounded-full"></div>
+                      </div>
+                      <p>Connect the story to real life</p>
+                    </div>
                   </div>
-                  <p>Listen to the target audio first</p>
                 </div>
-                <div className="flex items-start space-x-2">
-                  <div className="bg-purple-100 rounded-full p-1 mt-0.5">
-                    <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+              </>
+            ) : (
+              <>
+                {/* Recent Sessions */}
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-4">Recent Sessions</h3>
+                  <div className="space-y-3">
+                    {sessionHistory.length === 0 ? (
+                      <p className="text-gray-500 text-sm">No sessions yet. Start practicing!</p>
+                    ) : (
+                      sessionHistory.map((session) => (
+                        <div key={session.id} className="border rounded-lg p-3">
+                          <div className="text-xs text-gray-500 mb-1">{session.timestamp}</div>
+                          <div className="text-sm text-gray-700 mb-2 truncate">{session.text}</div>
+                          <div className="flex justify-between text-xs">
+                            <span className={getScoreColor(session.scores.pronunciation)}>P: {session.scores.pronunciation}%</span>
+                            <span className={getScoreColor(session.scores.fluency)}>F: {session.scores.fluency}%</span>
+                            <span className={getScoreColor(session.scores.accuracy)}>A: {session.scores.accuracy}%</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
                   </div>
-                  <p>Practice in a quiet environment</p>
                 </div>
-                <div className="flex items-start space-x-2">
-                  <div className="bg-purple-100 rounded-full p-1 mt-0.5">
-                    <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                
+                {/* Speaking Tips */}
+                <div className="bg-white rounded-xl shadow-lg p-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-4">Speaking Tips</h3>
+                  <div className="space-y-3 text-sm text-gray-600">
+                    <div className="flex items-start space-x-2">
+                      <div className="bg-purple-100 rounded-full p-1 mt-0.5">
+                        <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                      </div>
+                      <p>Speak clearly and at a moderate pace</p>
+                    </div>
+                    <div className="flex items-start space-x-2">
+                      <div className="bg-purple-100 rounded-full p-1 mt-0.5">
+                        <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                      </div>
+                      <p>Listen to the target audio first</p>
+                    </div>
+                    <div className="flex items-start space-x-2">
+                      <div className="bg-purple-100 rounded-full p-1 mt-0.5">
+                        <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                      </div>
+                      <p>Practice in a quiet environment</p>
+                    </div>
+                    <div className="flex items-start space-x-2">
+                      <div className="bg-purple-100 rounded-full p-1 mt-0.5">
+                        <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
+                      </div>
+                      <p>Focus on pronunciation accuracy</p>
+                    </div>
                   </div>
-                  <p>Focus on pronunciation accuracy</p>
                 </div>
-              </div>
-            </div>
+              </>
+            )}
           </div>
         </div>
       </div>

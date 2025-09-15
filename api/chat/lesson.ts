@@ -24,17 +24,25 @@ interface LessonContext {
   duration: number;
 }
 
+interface PageContext {
+  number: number;
+  text: string;
+  description: string;
+  image_url: string;
+}
+
 interface ChatRequest {
   message: string;
   history: ChatMessage[];
   context: {
     book: BookContext;
     lesson: LessonContext;
+    currentPage?: PageContext;
   };
 }
 
 // Mock AI response function - replace with actual AI service integration
-const generateAIResponse = async (message: string, history: ChatMessage[], context: { book: BookContext; lesson: LessonContext }): Promise<string> => {
+const generateAIResponse = async (message: string, history: ChatMessage[], context: { book: BookContext; lesson: LessonContext; currentPage?: PageContext }): Promise<string> => {
   // Create a comprehensive system prompt with lesson and book context
   const systemPrompt = `You are an AI tutor helping a student with a specific lesson. Here's the context:
 
@@ -81,12 +89,21 @@ Be encouraging, patient, and educational. Tailor your responses to the student's
     return `Excellent! "${context.book.title}" by ${context.book.author} is a wonderful ${context.book.difficulty_level}-level book that's perfect for our lesson "${context.lesson.title}". \n\n${context.book.description}\n\nThis book will help us achieve our learning objectives. What aspect of the story would you like to explore first?`;
   }
   
+  // Include current page context in responses
+  const pageContext = context.currentPage ? `\n\nOn page ${context.currentPage.number}, we're reading: "${context.currentPage.text || context.currentPage.description}"` : '';
+  
   if (lowerMessage.includes('character') || lowerMessage.includes('who')) {
-    return `Great question about the characters! Understanding characters is key to our lesson objectives. In "${context.book.title}", let's think about:\n\n• Who are the main characters?\n• What are their motivations?\n• How do they change throughout the story?\n• How do they relate to our lesson goals?\n\nWhat do you think about the main character so far?`;
+    return `Great question about the characters! Understanding characters is key to our lesson objectives. In "${context.book.title}", let's think about:${pageContext}\n\n• Who are the main characters?\n• What are their motivations?\n• How do they change throughout the story?\n• How do they relate to our lesson goals?\n\nLooking at ${context.currentPage ? `page ${context.currentPage.number}` : 'what we\'ve read'}, what do you think about the main character so far?`;
   }
   
   if (lowerMessage.includes('theme') || lowerMessage.includes('lesson') || lowerMessage.includes('meaning')) {
-    return `Excellent thinking! Identifying themes connects perfectly with our lesson "${context.lesson.title}". In "${context.book.title}", we can explore several important themes that align with our objectives:\n\n${context.lesson.objectives.slice(0, 2).map(obj => `• ${obj}`).join('\n')}\n\nWhat themes do you notice in the story? How do they connect to what we're learning?`;
+    return `Excellent thinking! Identifying themes connects perfectly with our lesson "${context.lesson.title}". In "${context.book.title}", we can explore several important themes that align with our objectives:${pageContext}\n\n${context.lesson.objectives.slice(0, 2).map(obj => `• ${obj}`).join('\n')}\n\nWhat themes do you notice in ${context.currentPage ? `this page` : 'the story'}? How do they connect to what we're learning?`;
+  }
+  
+  if (lowerMessage.includes('page') || lowerMessage.includes('image') || lowerMessage.includes('picture')) {
+    if (context.currentPage) {
+      return `Great question about page ${context.currentPage.number}! ${pageContext}\n\n${context.currentPage.image_url ? 'The illustration on this page helps us understand the story better. ' : ''}Let's discuss what's happening here. \n\nWhat do you notice about this part of the story? How does it connect to what we've read before?`;
+    }
   }
   
   if (lowerMessage.includes('help') || lowerMessage.includes('explain') || lowerMessage.includes('understand')) {
@@ -102,7 +119,7 @@ Be encouraging, patient, and educational. Tailor your responses to the student's
   }
   
   // Default response
-  return `That's a thoughtful question! In our lesson "${context.lesson.title}", we're exploring "${context.book.title}" to achieve our learning objectives. \n\nLet me help you think about this in relation to our goals. Can you tell me more about what you're thinking, or would you like me to guide you through one of our lesson activities?`;
+  return `That's a thoughtful question! In our lesson "${context.lesson.title}", we're exploring "${context.book.title}" to achieve our learning objectives. ${pageContext}\n\nLet me help you think about this in relation to our goals. Can you tell me more about what you're thinking, or would you like me to guide you through one of our lesson activities?`;
 };
 
 export const lessonChat = async (req: Request, res: Response) => {
