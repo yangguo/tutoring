@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import ReactMarkdown from 'react-markdown';
 import {
   ArrowLeft,
   Play,
@@ -353,8 +354,8 @@ const ReadingSession: React.FC = () => {
         }
       });
 
-      const data = await response.json();
       if (response.ok) {
+        const data = await response.json();
         // Update the imageDescriptions state
         setImageDescriptions(prev => ({
           ...prev,
@@ -376,7 +377,13 @@ const ReadingSession: React.FC = () => {
 
         toast.success('Description regenerated successfully!');
       } else {
-        throw new Error(data.error || 'Failed to regenerate description');
+        const errorText = await response.text();
+        try {
+          const errorJson = JSON.parse(errorText);
+          throw new Error(errorJson.error || 'Failed to regenerate description');
+        } catch (e) {
+          throw new Error(errorText || 'Failed to regenerate description');
+        }
       }
     } catch (error) {
       console.error('Error regenerating description:', error);
@@ -796,13 +803,33 @@ const ReadingSession: React.FC = () => {
                               )}
                             </button>
                           </div>
-                          <p className={`text-sm leading-relaxed ${
+                          <div className={`text-sm leading-relaxed ${
                             highContrastMode ? 'text-gray-100' : 'text-blue-700'
                           }`}
                           aria-live="polite"
                           >
-                            {currentPage?.image_description || imageDescriptions[currentPage?.id]}
-                          </p>
+                            <ReactMarkdown
+                              components={{
+                                p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                                strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                                em: ({ children }) => <em className="italic">{children}</em>,
+                                ul: ({ children }) => <ul className="list-disc list-inside mb-2">{children}</ul>,
+                                ol: ({ children }) => <ol className="list-decimal list-inside mb-2">{children}</ol>,
+                                li: ({ children }) => <li className="mb-1">{children}</li>,
+                                h1: ({ children }) => <h1 className="text-lg font-bold mb-2">{children}</h1>,
+                                h2: ({ children }) => <h2 className="text-base font-bold mb-2">{children}</h2>,
+                                h3: ({ children }) => <h3 className="text-sm font-bold mb-1">{children}</h3>,
+                                code: ({ children }) => <code className={`px-1 py-0.5 rounded text-xs ${
+                                  highContrastMode ? 'bg-gray-600 text-gray-100' : 'bg-gray-100 text-gray-800'
+                                }`}>{children}</code>,
+                                blockquote: ({ children }) => <blockquote className={`border-l-4 pl-3 italic ${
+                                  highContrastMode ? 'border-gray-500' : 'border-blue-300'
+                                }`}>{children}</blockquote>
+                              }}
+                            >
+                              {currentPage?.image_description || imageDescriptions[currentPage?.id]}
+                            </ReactMarkdown>
+                          </div>
                         </div>
                       </div>
                     </div>

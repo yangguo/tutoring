@@ -75,12 +75,17 @@ router.post('/:bookId/pages/:pageId/regenerate-description', authenticateToken, 
       .from('book_pages')
       .update({ image_description: newDescription })
       .eq('id', pageId)
-      .select()
-      .single();
+      .select();
 
     if (updateError) {
       console.error('Failed to update page with new description:', updateError);
       res.status(500).json({ error: 'Failed to save new description' });
+      return;
+    }
+
+    if (!updatedPage || updatedPage.length === 0) {
+      console.error('No page was updated - page ID may not exist:', pageId);
+      res.status(404).json({ error: 'Page not found or could not be updated' });
       return;
     }
 
