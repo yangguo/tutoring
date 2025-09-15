@@ -1105,7 +1105,19 @@ const SpeakingPractice: React.FC = () => {
                                   : 'bg-gray-100 text-gray-800'
                               }`}
                             >
-                              <div className="whitespace-pre-wrap">{message.content}</div>
+                              <ReactMarkdown 
+                                components={{
+                                  p: ({children}) => <p className="mb-2">{children}</p>,
+                                  strong: ({children}) => <strong className="font-semibold">{children}</strong>,
+                                  em: ({children}) => <em className="italic">{children}</em>,
+                                  code: ({children}) => <code className="bg-gray-100 px-1 py-0.5 rounded text-sm">{children}</code>,
+                                  ul: ({children}) => <ul className="list-disc list-inside mb-2">{children}</ul>,
+                                  ol: ({children}) => <ol className="list-decimal list-inside mb-2">{children}</ol>,
+                                  li: ({children}) => <li className="mb-1">{children}</li>
+                                }}
+                              >
+                                {message.content}
+                              </ReactMarkdown>
                               <div className={`text-xs mt-1 opacity-70`}>
                                 {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                               </div>
