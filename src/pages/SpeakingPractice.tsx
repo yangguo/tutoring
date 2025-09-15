@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mic, MicOff, Play, Pause, RotateCcw, CheckCircle, XCircle, ArrowLeft, Volume2, MessageCircle, ChevronLeft, ChevronRight, BookOpen, Send, Clock } from 'lucide-react';
+import { Mic, MicOff, Play, Pause, RotateCcw, CheckCircle, XCircle, ArrowLeft, Volume2, MessageCircle, ChevronLeft, ChevronRight, BookOpen, Send, Clock, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import { api } from '../lib/api';
@@ -691,6 +691,11 @@ const SpeakingPractice: React.FC = () => {
     sendLlmMessage(llmChatInput);
   };
 
+  const clearLlmChat = () => {
+    setLlmChatMessages([]);
+    toast.success('Chat history cleared');
+  };
+
   const getScoreColor = (score: number) => {
     if (score >= 80) return 'text-green-600';
     if (score >= 60) return 'text-yellow-600';
@@ -1056,7 +1061,18 @@ const SpeakingPractice: React.FC = () => {
                 <div className="bg-white rounded-xl shadow-lg p-6 h-[600px] flex flex-col">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="text-lg font-semibold text-gray-800">AI Assistant</h3>
-                      <MessageCircle className="w-5 h-5 text-indigo-600" />
+                      <div className="flex items-center space-x-2">
+                        {llmChatMessages.length > 0 && (
+                          <button
+                            onClick={clearLlmChat}
+                            className="p-1.5 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            title="Clear chat history"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                        <MessageCircle className="w-5 h-5 text-indigo-600" />
+                      </div>
                     </div>
                     
                     {/* Chat Messages */}

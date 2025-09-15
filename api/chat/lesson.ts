@@ -56,7 +56,7 @@ ${context.lesson.objectives.map(obj => `  • ${obj}`).join('\n')}
 - Activities:
 ${context.lesson.activities.map(activity => `  • ${typeof activity === 'string' ? activity : activity.description || activity.type || 'Activity'}`).join('\n')}
 
-BOOK INFORMATION:
+BOOK INFORMATION (use as context, don't repeat descriptions):
 - Title: "${context.book.title}" by ${context.book.author}
 - Description: ${context.book.description}
 - Difficulty Level: ${context.book.difficulty_level}
@@ -66,11 +66,13 @@ BOOK INFORMATION:
 Your role is to:
 1. Help the student achieve the lesson objectives
 2. Guide them through the lesson activities
-3. Use the book content to support learning
+3. Use the book content to support learning (but don't repeat full descriptions)
 4. Provide age-appropriate explanations
 5. Encourage critical thinking and engagement
 6. Ask questions to check understanding
 7. Relate book content to lesson goals
+
+IMPORTANT: Use the book description as context to understand the story, but don't output the full description to students. Instead, ask engaging questions and guide discussion based on your understanding of the content.
 
 Be encouraging, patient, and educational. Tailor your responses to the student's level and the lesson objectives.`;
 
@@ -86,7 +88,7 @@ Be encouraging, patient, and educational. Tailor your responses to the student's
   }
   
   if (lowerMessage.includes('book') || lowerMessage.includes('story') || lowerMessage.includes(context.book.title.toLowerCase())) {
-    return `Excellent! "${context.book.title}" by ${context.book.author} is a wonderful ${context.book.difficulty_level}-level book that's perfect for our lesson "${context.lesson.title}". \n\n${context.book.description}\n\nThis book will help us achieve our learning objectives. What aspect of the story would you like to explore first?`;
+    return `Excellent! "${context.book.title}" by ${context.book.author} is a wonderful ${context.book.difficulty_level}-level book that's perfect for our lesson "${context.lesson.title}". This book will help us achieve our learning objectives. What aspect of the story would you like to explore first?`;
   }
   
   // Include current page context in responses
