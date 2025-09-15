@@ -85,12 +85,21 @@ const SpeakingPractice: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const chatMessagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetchBooks();
     initializeSpeechRecognition();
     setCurrentText(practiceTexts[0]);
   }, []);
+
+  // Auto-scroll to bottom when new messages are added
+  useEffect(() => {
+    if (chatMessagesEndRef.current && chatMessagesEndRef.current.parentElement) {
+      const container = chatMessagesEndRef.current.parentElement;
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [llmChatMessages]);
 
   const fetchBooks = async (retryCount = 0) => {
     try {
@@ -1076,7 +1085,7 @@ const SpeakingPractice: React.FC = () => {
                     </div>
                     
                     {/* Chat Messages */}
-                    <div className="flex-1 overflow-y-auto space-y-3 mb-4 pr-2">
+                    <div className="flex-1 overflow-y-auto space-y-3 mb-4 pr-2 max-h-96">
                       {llmChatMessages.length === 0 ? (
                         <div className="text-center text-gray-500 text-sm mt-8">
                           <MessageCircle className="w-8 h-8 mx-auto mb-2 text-gray-300" />
@@ -1115,6 +1124,7 @@ const SpeakingPractice: React.FC = () => {
                           </div>
                         </div>
                       )}
+                      <div ref={chatMessagesEndRef} />
                     </div>
                     
                     {/* Chat Input */}
