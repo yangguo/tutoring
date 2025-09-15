@@ -81,17 +81,228 @@ const SpeakingPractice: React.FC = () => {
   const [llmChatInput, setLlmChatInput] = useState('');
   const [isLlmChatLoading, setIsLlmChatLoading] = useState(false);
   
+  // Voice functionality for AI Assistant
+  const [isVoiceInputActive, setIsVoiceInputActive] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceInputTranscript, setVoiceInputTranscript] = useState('');
+  const [speechSynthesis, setSpeechSynthesis] = useState<SpeechSynthesis | null>(null);
+  
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const chatMessagesEndRef = useRef<HTMLDivElement>(null);
+  const voiceRecognitionRef = useRef<SpeechRecognition | null>(null);
+  const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   useEffect(() => {
     fetchBooks();
     initializeSpeechRecognition();
+    initializeVoiceFunctionality();
     setCurrentText(practiceTexts[0]);
   }, []);
+
+  // Cleanup speech synthesis on component unmount
+  useEffect(() => {
+    return () => {
+      if (speechSynthesis) {
+        speechSynthesis.cancel();
+      }
+      if (voiceRecognitionRef.current) {
+        voiceRecognitionRef.current.abort();
+      }
+    };
+  }, [speechSynthesis]);
+
+  // Initialize voice functionality for AI Assistant
+  const initializeVoiceFunctionality = () => {
+    // Initialize speech synthesis with better error handling
+    if ('speechSynthesis' in window) {
+      const synth = window.speechSynthesis;
+      
+      // Wait for voices to load
+      const loadVoices = () => {
+        const voices = synth.getVoices();
+        if (voices.length > 0) {
+          setSpeechSynthesis(synth);
+        } else {
+          // Retry after a short delay
+          setTimeout(loadVoices, 100);
+        }
+      };
+      
+      if (synth.getVoices().length > 0) {
+        setSpeechSynthesis(synth);
+      } else {
+        synth.addEventListener('voiceschanged', loadVoices);
+        loadVoices();
+      }
+    }
+
+    // Initialize voice recognition for chat input
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const recognition = new SpeechRecognition();
+      
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      
+      recognition.onstart = () => {
+        setIsListening(true);
+      };
+      
+      recognition.onresult = (event) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript;
+        }
+        setVoiceInputTranscript(transcript);
+        
+        // If final result, update chat input
+        if (event.results[event.results.length - 1].isFinal) {
+          setLlmChatInput(transcript);
+          setVoiceInputTranscript('');
+        }
+      };
+      
+      recognition.onend = () => {
+        setIsListening(false);
+        setIsVoiceInputActive(false);
+      };
+      
+      recognition.onerror = (event) => {
+        console.error('Voice recognition error:', event.error);
+        setIsListening(false);
+        setIsVoiceInputActive(false);
+        toast.error('Voice recognition failed. Please try again.');
+      };
+      
+      voiceRecognitionRef.current = recognition;
+    }
+  };
+
+  // Voice input functions
+  const startVoiceInput = () => {
+    if (!voiceRecognitionRef.current) {
+      toast.error('Voice recognition not supported in this browser');
+      return;
+    }
+    
+    try {
+      setIsVoiceInputActive(true);
+      setVoiceInputTranscript('');
+      voiceRecognitionRef.current.start();
+    } catch (error) {
+      console.error('Error starting voice recognition:', error);
+      toast.error('Failed to start voice recognition');
+      setIsVoiceInputActive(false);
+    }
+  };
+
+  const stopVoiceInput = () => {
+    if (voiceRecognitionRef.current && isListening) {
+      voiceRecognitionRef.current.stop();
+    }
+    setIsVoiceInputActive(false);
+  };
+
+  // Voice output functions
+  const speakText = (text: string) => {
+    if (!speechSynthesis || !text.trim()) {
+      console.warn('Speech synthesis not available or no text to speak');
+      return;
+    }
+    
+    // Check if speech synthesis is ready
+    if (speechSynthesis.speaking || speechSynthesis.pending) {
+      speechSynthesis.cancel();
+      // Wait a bit before starting new speech
+      setTimeout(() => speakText(text), 100);
+      return;
+    }
+    
+    // Clean text for better speech (remove markdown formatting)
+    const cleanText = text
+      .replace(/\*\*(.*?)\*\*/g, '$1') // Remove bold
+      .replace(/\*(.*?)\*/g, '$1') // Remove italic
+      .replace(/`(.*?)`/g, '$1') // Remove code
+      .replace(/#{1,6}\s/g, '') // Remove headers
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // Remove links
+      .replace(/\n+/g, '. ') // Replace newlines with periods
+      .trim();
+    
+    if (!cleanText) {
+      console.warn('No text to speak after cleaning');
+      return;
+    }
+    
+    try {
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      
+      // Get available voices and use a preferred one if available
+      const voices = speechSynthesis.getVoices();
+      const englishVoice = voices.find(voice => voice.lang.startsWith('en'));
+      if (englishVoice) {
+        utterance.voice = englishVoice;
+      }
+      
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      utterance.lang = 'en-US';
+      
+      utterance.onstart = () => {
+        setIsSpeaking(true);
+      };
+      
+      utterance.onend = () => {
+        setIsSpeaking(false);
+      };
+      
+      utterance.onerror = (event) => {
+        console.error('Speech synthesis error:', event.error, event);
+        setIsSpeaking(false);
+        
+        // Only show error toast for certain error types
+        if (event.error === 'network' || event.error === 'synthesis-failed') {
+          toast.error('Failed to speak text. Please try again.');
+        } else if (event.error === 'not-allowed') {
+          toast.error('Speech synthesis not allowed. Please check browser permissions.');
+        }
+        // For other errors like 'interrupted' or 'canceled', don't show toast
+      };
+      
+      speechUtteranceRef.current = utterance;
+      speechSynthesis.speak(utterance);
+      
+    } catch (error) {
+      console.error('Error creating speech utterance:', error);
+      setIsSpeaking(false);
+      toast.error('Failed to initialize speech synthesis');
+    }
+  };
+
+  const stopSpeaking = () => {
+    if (speechSynthesis) {
+      try {
+        speechSynthesis.cancel();
+        
+        // Force stop the current utterance if it exists
+        if (speechUtteranceRef.current) {
+          speechUtteranceRef.current.onend = null;
+          speechUtteranceRef.current.onerror = null;
+          speechUtteranceRef.current = null;
+        }
+        
+        setIsSpeaking(false);
+      } catch (error) {
+        console.error('Error stopping speech:', error);
+        setIsSpeaking(false);
+      }
+    }
+  };
 
   // Auto-scroll to bottom when new messages are added
   useEffect(() => {
@@ -679,6 +890,9 @@ const SpeakingPractice: React.FC = () => {
       };
       setLlmChatMessages(prev => [...prev, assistantMessage]);
       
+      // Auto-play voice output if enabled
+      speakText(response.response);
+      
     } catch (error) {
       console.error('Error sending message to LLM:', error);
       toast.error('Failed to get response from AI assistant');
@@ -1139,16 +1353,73 @@ const SpeakingPractice: React.FC = () => {
                       <div ref={chatMessagesEndRef} />
                     </div>
                     
+                    {/* Voice Status Indicator */}
+                    {(isListening || voiceInputTranscript) && (
+                      <div className="mb-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
+                        <div className="flex items-center space-x-2">
+                          <div className="flex items-center space-x-1">
+                            <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                            <span className="text-sm text-blue-700 font-medium">
+                              {isListening ? 'Listening...' : 'Processing...'}
+                            </span>
+                          </div>
+                        </div>
+                        {voiceInputTranscript && (
+                          <p className="text-sm text-gray-600 mt-1 italic">
+                            "{voiceInputTranscript}"
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    
                     {/* Chat Input */}
                     <form onSubmit={handleLlmChatSubmit} className="flex space-x-2">
-                      <input
-                        type="text"
-                        value={llmChatInput}
-                        onChange={(e) => setLlmChatInput(e.target.value)}
-                        placeholder="Ask about the content..."
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
+                      <div className="flex-1 relative">
+                        <input
+                          type="text"
+                          value={llmChatInput}
+                          onChange={(e) => setLlmChatInput(e.target.value)}
+                          placeholder="Ask about the content..."
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
+                          disabled={isLlmChatLoading}
+                        />
+                      </div>
+                      
+                      {/* Voice Input Button */}
+                      <button
+                        type="button"
+                        onClick={isVoiceInputActive ? stopVoiceInput : startVoiceInput}
+                        className={`px-3 py-2 rounded-lg transition-colors ${
+                          isVoiceInputActive 
+                            ? 'bg-red-600 hover:bg-red-700 text-white' 
+                            : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                        }`}
                         disabled={isLlmChatLoading}
-                      />
+                        title={isVoiceInputActive ? 'Stop voice input' : 'Start voice input'}
+                      >
+                        {isVoiceInputActive ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                      </button>
+                      
+                      {/* Voice Output Button */}
+                      <button
+                        type="button"
+                        onClick={isSpeaking ? stopSpeaking : () => {
+                          const lastMessage = llmChatMessages[llmChatMessages.length - 1];
+                          if (lastMessage && lastMessage.role === 'assistant') {
+                            speakText(lastMessage.content);
+                          }
+                        }}
+                        className={`px-3 py-2 rounded-lg transition-colors ${
+                          isSpeaking 
+                            ? 'bg-orange-600 hover:bg-orange-700 text-white' 
+                            : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                        }`}
+                        disabled={isLlmChatLoading || (llmChatMessages.length === 0 || llmChatMessages[llmChatMessages.length - 1]?.role !== 'assistant')}
+                        title={isSpeaking ? 'Stop speaking' : 'Speak last response'}
+                      >
+                        {isSpeaking ? <Pause className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                      </button>
+                      
                       <button
                         type="submit"
                         disabled={!llmChatInput.trim() || isLlmChatLoading}
