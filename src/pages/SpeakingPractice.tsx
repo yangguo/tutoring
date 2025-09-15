@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mic, MicOff, Play, Pause, RotateCcw, CheckCircle, XCircle, ArrowLeft, Volume2, MessageCircle, ChevronLeft, ChevronRight, BookOpen, Send, Clock } from 'lucide-react';
 import { toast } from 'sonner';
+import ReactMarkdown from 'react-markdown';
 import { api } from '../lib/api';
 import type { Book, BookPage, DiscussionMessage } from '../lib/api';
 
@@ -746,11 +747,11 @@ const SpeakingPractice: React.FC = () => {
                           
                           {/* Book Page Image Display */}
                           {bookPages[currentPageIndex]?.image_url && (
-                            <div className="bg-white rounded-lg p-4 mb-4">
+                            <div className="bg-white rounded-lg p-6 mb-6">
                               <img
                                 src={bookPages[currentPageIndex].image_url}
                                 alt={`Page ${currentPageIndex + 1} of ${selectedBook.title}`}
-                                className="w-full h-64 object-contain rounded-lg border"
+                                className="w-full h-screen object-contain rounded-lg border shadow-lg"
                                 onError={(e) => {
                                   console.error('Failed to load image:', bookPages[currentPageIndex].image_url);
                                   e.currentTarget.style.display = 'none';
@@ -761,8 +762,10 @@ const SpeakingPractice: React.FC = () => {
                           
                           {/* Page Text Content */}
                           {currentText && (
-                            <div className="bg-white rounded-lg p-4">
-                              <p className="text-gray-800 leading-relaxed">{currentText}</p>
+                            <div className="bg-white rounded-lg p-6">
+                              <div className="prose prose-gray max-w-none">
+                                <ReactMarkdown>{currentText}</ReactMarkdown>
+                              </div>
                             </div>
                           )}
                         </div>
