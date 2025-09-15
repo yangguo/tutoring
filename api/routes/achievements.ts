@@ -48,10 +48,10 @@ router.get('/', async (req, res) => {
 router.get('/user/:userId', authenticateToken, async (req, res) => {
   try {
     const { userId } = req.params;
-    const currentUser = req.user;
+    const currentUser = req.user!;
 
     // Check access permissions
-    if (currentUser.role === 'child' && currentUser.id !== userId) {
+    if (currentUser.role === 'child' && currentUser.userId !== userId) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -63,7 +63,7 @@ router.get('/user/:userId', authenticateToken, async (req, res) => {
         .eq('id', userId)
         .single();
 
-      if (childError || !child || child.parent_id !== currentUser.id) {
+      if (childError || !child || child.parent_id !== currentUser.userId) {
         return res.status(403).json({ error: 'Access denied' });
       }
     }

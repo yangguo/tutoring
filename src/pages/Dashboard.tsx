@@ -25,7 +25,7 @@ interface LessonPlan {
   targetLevel: string;
   duration: number;
   objectives: string[];
-  activities: string[];
+  activities: (string | { description?: string; type?: string })[];
   createdAt: string;
   assignedStudents: string[];
   bookIds?: string[];
@@ -46,7 +46,7 @@ const Dashboard: React.FC = () => {
   const [lessonPlans, setLessonPlans] = useState<LessonPlan[]>([]);
   const [progressData, setProgressData] = useState<ProgressData[]>([]);
   const [selectedStudent, setSelectedStudent] = useState<string>('');
-  const [activeTab, setActiveTab] = useState<'overview' | 'students' | 'lessons' | 'analytics'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'students' | 'lessons' | 'analytics' | 'books' | 'my-lessons' | 'achievements' | 'users' | 'content'>('overview');
   const [showLessonForm, setShowLessonForm] = useState(false);
   const [editingLesson, setEditingLesson] = useState<LessonPlan | null>(null);
   const [loading, setLoading] = useState(true);

@@ -44,30 +44,32 @@ const Achievements: React.FC = () => {
   ];
 
   useEffect(() => {
-    fetchAchievements();
-    fetchLeaderboard();
-  }, []);
+    if (user?.id) {
+      fetchAchievements(user.id);
+      fetchLeaderboard();
+    }
+  }, [user?.id]);
 
-  const fetchAchievements = async () => {
+  const fetchAchievements = async (userId: string) => {
     try {
-      const response = await api.getUserAchievements();
+      const response = await api.getUserAchievements(userId);
       const userAchievements = response.achievements || [];
       
       // Calculate user stats
-      const earned = userAchievements.filter((a: UserAchievement) => a.is_earned);
-      const totalPoints = earned.reduce((sum: number, a: UserAchievement) => sum + (a.points || 0), 0);
+      const earned = userAchievements.filter((a: Achievement) => a.earned);
+      const totalPoints = earned.reduce((sum: number, a: Achievement) => sum + (a.points || 0), 0);
       const recent = earned
-        .sort((a: UserAchievement, b: UserAchievement) => 
+        .sort((a: Achievement, b: Achievement) => 
           new Date(b.earned_at || '').getTime() - new Date(a.earned_at || '').getTime()
         )
         .slice(0, 3);
       
-      setAchievements(userAchievements);
+      setAchievements(userAchievements.map(a => ({ ...a, progress: a.earned ? 100 : 0, is_earned: !!a.earned })) as UserAchievement[]);
       setUserStats({
         totalEarned: earned.length,
         totalPoints,
         rank: 0, // Will be updated from leaderboard
-        recentAchievements: recent
+        recentAchievements: recent.map(a => ({ ...a, progress: a.earned ? 100 : 0, is_earned: !!a.earned })) as UserAchievement[]
       });
     } catch (error) {
       console.error('Error fetching achievements:', error);
@@ -79,7 +81,7 @@ const Achievements: React.FC = () => {
 
   const fetchLeaderboard = async () => {
     try {
-      const response = await api.getAchievementLeaderboard();
+      const response = await api.getLeaderboard();
       const leaderboardData = response.leaderboard || [];
       setLeaderboard(leaderboardData);
       

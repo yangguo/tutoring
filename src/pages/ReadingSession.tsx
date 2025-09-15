@@ -116,7 +116,7 @@ const ReadingSession: React.FC = () => {
     }
   };
 
-  const handleSendMessage = async (message: string, history: any[]): Promise<string> => {
+  const handleSendMessage = async (message: string, history: { role: string; content: string; }[]): Promise<string> => {
     if (!book?.id || !message.trim()) return "I'm sorry, I couldn't process your message.";
     
     setLoadingDiscussion(true);

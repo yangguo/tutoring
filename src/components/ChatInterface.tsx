@@ -11,7 +11,7 @@ interface Message {
 interface ChatInterfaceProps {
   isOpen: boolean;
   onClose: () => void;
-  onSendMessage: (message: string, history: Message[]) => Promise<string>;
+  onSendMessage: (message: string, history: { role: string; content: string; }[]) => Promise<string>;
   bookTitle: string;
   pageNumber?: number;
   className?: string;

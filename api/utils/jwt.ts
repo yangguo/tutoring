@@ -1,8 +1,9 @@
 import jwt from 'jsonwebtoken';
 import { User } from '../config/supabase';
+import { Request, Response, NextFunction } from 'express';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key';
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '604800'; // 7 days in seconds
 
 export interface JWTPayload {
   userId: string;
@@ -22,9 +23,11 @@ export const generateToken = (user: User): string => {
     role: user.role
   };
 
-  return jwt.sign(payload, JWT_SECRET, {
-    expiresIn: JWT_EXPIRES_IN
-  });
+  const options: jwt.SignOptions = {
+    expiresIn: parseInt(JWT_EXPIRES_IN, 10)
+  };
+
+  return jwt.sign(payload, JWT_SECRET, options);
 };
 
 /**
@@ -51,7 +54,7 @@ export const extractTokenFromHeader = (authHeader: string | undefined): string |
 /**
  * Middleware to verify JWT token
  */
-export const authenticateToken = (req: any, res: any, next: any) => {
+export const authenticateToken = (req: Request, res: Response, next: NextFunction) => {
   const token = extractTokenFromHeader(req.headers.authorization);
   
   if (!token) {
