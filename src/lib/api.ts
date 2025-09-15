@@ -394,6 +394,14 @@ class ApiClient {
       `/api/books/discussions?${searchParams.toString()}`
     );
   }
+
+  // Speaking Practice Chat
+  async sendSpeakingPracticeMessage(message: string, history: any[], context: any) {
+    return this.request<{ success: boolean; response: string; timestamp: string }>('/api/chat/speaking-practice', {
+      method: 'POST',
+      body: JSON.stringify({ message, history, context }),
+    });
+  }
 }
 
 export const api = new ApiClient(API_BASE_URL);

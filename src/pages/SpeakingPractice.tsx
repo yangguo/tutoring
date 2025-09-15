@@ -76,6 +76,11 @@ const SpeakingPractice: React.FC = () => {
   const [isVoiceMode, setIsVoiceMode] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   
+  // LLM Chat sidebar functionality
+  const [llmChatMessages, setLlmChatMessages] = useState<{role: 'user' | 'assistant', content: string, timestamp: Date}[]>([]);
+  const [llmChatInput, setLlmChatInput] = useState('');
+  const [isLlmChatLoading, setIsLlmChatLoading] = useState(false);
+  
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -601,6 +606,91 @@ const SpeakingPractice: React.FC = () => {
     }
   };
 
+  // LLM Chat functionality
+  const sendLlmMessage = async (message: string) => {
+    if (!message.trim() || isLlmChatLoading) return;
+    
+    setIsLlmChatLoading(true);
+    
+    // Add user message
+    const userMessage = {
+      role: 'user' as const,
+      content: message,
+      timestamp: new Date()
+    };
+    setLlmChatMessages(prev => [...prev, userMessage]);
+    setLlmChatInput('');
+    
+    try {
+      // Prepare context from current page
+      let context = '';
+      if (selectedBook && bookPages.length > 0) {
+        const currentPage = bookPages[currentPageIndex];
+        context = `Book: ${selectedBook.title} by ${selectedBook.author}\n`;
+        context += `Page ${currentPageIndex + 1}: ${currentPage.text_content || currentPage.image_description || ''}\n`;
+        if (currentPage.image_description) {
+          context += `Image description: ${currentPage.image_description}\n`;
+        }
+      } else if (selectedBook) {
+        context = `Book: ${selectedBook.title} by ${selectedBook.author}\n${selectedBook.description || ''}`;
+      } else {
+        context = `Speaking practice text: ${currentText}`;
+      }
+      
+      // Prepare context for speaking practice chat
+      const chatContext = {
+        book: selectedBook ? {
+          title: selectedBook.title,
+          author: selectedBook.author,
+          description: selectedBook.description || '',
+          difficulty_level: selectedBook.difficulty_level,
+          age_range: selectedBook.age_range,
+          page_count: selectedBook.page_count
+        } : null,
+        currentPage: selectedBook && bookPages.length > 0 ? {
+          number: currentPageIndex + 1,
+          text_content: bookPages[currentPageIndex]?.text_content,
+          image_description: bookPages[currentPageIndex]?.image_description,
+          image_url: bookPages[currentPageIndex]?.image_url
+        } : null
+      };
+      
+      // Call LLM API using the API client
+      const response = await api.sendSpeakingPracticeMessage(
+        message,
+        llmChatMessages.slice(-10), // Last 10 messages for context
+        chatContext
+      );
+      
+      // Add assistant response
+      const assistantMessage = {
+        role: 'assistant' as const,
+        content: response.response,
+        timestamp: new Date()
+      };
+      setLlmChatMessages(prev => [...prev, assistantMessage]);
+      
+    } catch (error) {
+      console.error('Error sending message to LLM:', error);
+      toast.error('Failed to get response from AI assistant');
+      
+      // Add error message
+      const errorMessage = {
+        role: 'assistant' as const,
+        content: 'Sorry, I\'m having trouble responding right now. Please try again.',
+        timestamp: new Date()
+      };
+      setLlmChatMessages(prev => [...prev, errorMessage]);
+    } finally {
+      setIsLlmChatLoading(false);
+    }
+  };
+  
+  const handleLlmChatSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    sendLlmMessage(llmChatInput);
+  };
+
   const getScoreColor = (score: number) => {
     if (score >= 80) return 'text-green-600';
     if (score >= 60) return 'text-yellow-600';
@@ -962,36 +1052,74 @@ const SpeakingPractice: React.FC = () => {
                   </div>
                 </div>
                 
-                {/* Discussion Tips */}
-                <div className="bg-white rounded-xl shadow-lg p-6">
-                  <h3 className="text-lg font-semibold text-gray-800 mb-4">Discussion Tips</h3>
-                  <div className="space-y-3 text-sm text-gray-600">
-                    <div className="flex items-start space-x-2">
-                      <div className="bg-green-100 rounded-full p-1 mt-0.5">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                      </div>
-                      <p>Ask questions about characters and plot</p>
+                {/* AI Assistant */}
+                <div className="bg-white rounded-xl shadow-lg p-6 h-[600px] flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-lg font-semibold text-gray-800">AI Assistant</h3>
+                      <MessageCircle className="w-5 h-5 text-indigo-600" />
                     </div>
-                    <div className="flex items-start space-x-2">
-                      <div className="bg-yellow-100 rounded-full p-1 mt-0.5">
-                        <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>
-                      </div>
-                      <p>Share your thoughts and predictions</p>
+                    
+                    {/* Chat Messages */}
+                    <div className="flex-1 overflow-y-auto space-y-3 mb-4 pr-2">
+                      {llmChatMessages.length === 0 ? (
+                        <div className="text-center text-gray-500 text-sm mt-8">
+                          <MessageCircle className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+                          <p>Start a conversation with the AI assistant!</p>
+                          <p className="text-xs mt-1">Ask questions about the current content.</p>
+                        </div>
+                      ) : (
+                        llmChatMessages.map((message, index) => (
+                          <div
+                            key={index}
+                            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                          >
+                            <div
+                              className={`max-w-[80%] p-3 rounded-lg text-sm ${
+                                message.role === 'user'
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'bg-gray-100 text-gray-800'
+                              }`}
+                            >
+                              <div className="whitespace-pre-wrap">{message.content}</div>
+                              <div className={`text-xs mt-1 opacity-70`}>
+                                {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      
+                      {isLlmChatLoading && (
+                        <div className="flex justify-start">
+                          <div className="bg-gray-100 text-gray-800 p-3 rounded-lg text-sm">
+                            <div className="flex items-center space-x-2">
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-600"></div>
+                              <span>AI is thinking...</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div className="flex items-start space-x-2">
-                      <div className="bg-blue-100 rounded-full p-1 mt-0.5">
-                        <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                      </div>
-                      <p>Discuss themes and deeper meanings</p>
-                    </div>
-                    <div className="flex items-start space-x-2">
-                      <div className="bg-indigo-100 rounded-full p-1 mt-0.5">
-                        <div className="w-2 h-2 bg-indigo-500 rounded-full"></div>
-                      </div>
-                      <p>Connect the story to real life</p>
-                    </div>
+                    
+                    {/* Chat Input */}
+                    <form onSubmit={handleLlmChatSubmit} className="flex space-x-2">
+                      <input
+                        type="text"
+                        value={llmChatInput}
+                        onChange={(e) => setLlmChatInput(e.target.value)}
+                        placeholder="Ask about the content..."
+                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-sm"
+                        disabled={isLlmChatLoading}
+                      />
+                      <button
+                        type="submit"
+                        disabled={!llmChatInput.trim() || isLlmChatLoading}
+                        className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </form>
                   </div>
-                </div>
               </>
             ) : (
               <>
