@@ -25,17 +25,7 @@
   ],
   "functions": {
     "api/index.ts": {
-      "maxDuration": 30,
-      "include": [
-        "api/index.ts",
-        "api/app.ts",
-        "api/router.ts",
-        "api/chat/lesson.ts",
-        "api/chat/speaking-practice.ts",
-        "api/config/supabase.ts",
-        "api/utils/jwt.ts",
-        "api/utils/health.ts"
-      ]
+      "maxDuration": 30
     }
   }
 }
