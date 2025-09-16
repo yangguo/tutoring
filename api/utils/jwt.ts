@@ -1,5 +1,5 @@
 import jwt from 'jsonwebtoken';
-import { supabase, type User } from '../config/supabase.js';
+import { supabase, type User } from '../config/supabase';
 import { Request, Response, NextFunction } from 'express';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key';

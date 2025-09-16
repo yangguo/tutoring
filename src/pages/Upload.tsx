@@ -154,7 +154,7 @@ const Upload: React.FC = () => {
 
           // Build FormData for pages
           const pagesForm = new FormData();
-          images.forEach(({ blob, pageNumber }, idx) => {
+          images.forEach(({ blob, pageNumber }, _idx) => {
             const fileName = `page-${pageNumber}.png`;
             const file = new File([blob], fileName, { type: 'image/png' });
             pagesForm.append('pages', file, fileName);

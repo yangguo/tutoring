@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Search, Plus, BookOpen, Volume2, Star, Trash2, Edit3, Check, X } from 'lucide-react';
+import { ArrowLeft, Search, Plus, BookOpen, Volume2, Trash2, Edit3, Check, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../lib/api';
 import type { VocabularyWord } from '../lib/api';

@@ -8,7 +8,7 @@ import jwt from 'jsonwebtoken';
 import multer from 'multer';
 import { supabase, User } from './config/supabase.js';
 import { generateToken, authenticateToken, requireRole } from './utils/jwt.js';
-import type { Achievement, UserAchievement, Book } from './config/supabase.js';
+import type { Book } from './config/supabase.js';
 import lessonChatHandler from './chat/lesson.js';
 import speakingPracticeChatHandler from './chat/speaking-practice.js';
 
@@ -23,7 +23,7 @@ const awardAchievementSchema = Joi.object({
   achievementId: Joi.string().uuid().required()
 });
 
-router.get('/achievements', async (req, res) => {
+router.get('/achievements', async (_req, res) => {
   try {
     const { data: achievements, error } = await supabase
       .from('achievements')
@@ -153,6 +153,12 @@ router.post('/achievements/award', authenticateToken, requireRole(['admin']), as
       .eq('user_id', userId)
       .eq('achievement_id', achievementId)
       .single();
+
+    if (existingError && existingError.code !== 'PGRST116') {
+      // PGRST116 is "not found" which is expected, other errors are actual problems
+      console.error('Error checking existing achievement:', existingError);
+      return res.status(500).json({ error: 'Failed to check existing achievements' });
+    }
 
     if (existingAward) {
       return res.status(400).json({ error: 'User already has this achievement' });
@@ -343,7 +349,7 @@ router.post('/auth/register', async (req: Request, res: Response): Promise<void>
     }
 
     // Find parent if parent_email is provided
-    let parent_id = null;
+    let parent_id: string | null = null;
     if (parent_email && role === 'child') {
       const { data: parentData } = await supabase
         .from('users')
@@ -455,7 +461,7 @@ router.post('/auth/login', async (req: Request, res: Response): Promise<void> =>
   }
 });
 
-router.post('/auth/logout', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.post('/auth/logout', authenticateToken, async (_req: Request, res: Response): Promise<void> => {
   try {
     // In a JWT-based system, logout is typically handled client-side
     // by removing the token. We could implement a token blacklist here if needed.
@@ -575,15 +581,7 @@ const readingSessionSchema = Joi.object({
   vocabulary_learned: Joi.array().items(Joi.string().uuid()).optional()
 });
 
-const speakingSessionSchema = Joi.object({
-  book_id: Joi.string().uuid().required(),
-  page_number: Joi.number().positive().required(),
-  text_content: Joi.string().required(),
-  audio_url: Joi.string().uri().optional(),
-  pronunciation_score: Joi.number().min(0).max(100).optional(),
-  fluency_score: Joi.number().min(0).max(100).optional(),
-  accuracy_score: Joi.number().min(0).max(100).optional()
-});
+
 
 router.get('/books', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -1412,7 +1410,7 @@ router.post('/books/:bookId/analyze-images', authenticateToken, requireRole(['ad
 });
 
 // Helper function for basic image description
-function generateBasicImageDescription(imageUrl: string, context?: string): string {
+function generateBasicImageDescription(_imageUrl: string, context?: string): string {
   const contextDescriptions = {
     'cover': 'This is the cover of a children\'s book with colorful illustrations.',
     'story': 'This page shows an illustration from the story with characters and scenes.',
@@ -1742,7 +1740,7 @@ router.get('/books/discussions', authenticateToken, async (req: Request, res: Re
 });
 
 // Helper function for fallback discussion responses
-function generateFallbackDiscussionResponse(message: string, book: any, pageContext: string): string {
+function generateFallbackDiscussionResponse(message: string, book: any, _pageContext: string): string {
   const lowerMessage = message.toLowerCase();
   
   // Simple pattern matching for common questions
@@ -1785,7 +1783,7 @@ router.post('/chat/speaking-practice', ...speakingPracticeChatHandler);
 
 router.use('/dashboard', authenticateToken);
 
-router.get('/dashboard/students', async (req: Request, res: Response) => {
+router.get('/dashboard/students', async (_req: Request, res: Response) => {
   try {
     const { data: students, error } = await supabase
       .from('users')
@@ -1877,7 +1875,7 @@ router.get('/dashboard/students', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/dashboard/lessons', async (req: Request, res: Response) => {
+router.get('/dashboard/lessons', async (_req: Request, res: Response) => {
   try {
     const { data: lessons, error } = await supabase
       .from('lesson_plans')
@@ -2092,7 +2090,7 @@ router.delete('/dashboard/lessons/:id', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/dashboard/progress', async (req: Request, res: Response) => {
+router.get('/dashboard/progress', async (_req: Request, res: Response) => {
   try {
     const { data: readingSessions, error: readingError } = await supabase
       .from('reading_sessions')
@@ -2129,7 +2127,7 @@ router.get('/dashboard/progress', async (req: Request, res: Response) => {
   }
 });
 
-router.get('/dashboard/analytics', async (req: Request, res: Response) => {
+router.get('/dashboard/analytics', async (_req: Request, res: Response) => {
   try {
     // Get reading sessions data for the last 30 days
     const thirtyDaysAgo = new Date();
@@ -2251,7 +2249,7 @@ router.post('/books/:bookId/pages/:pageId/regenerate-description', authenticateT
     const { image_url } = page;
 
     // 2. Analyze the image with OpenAI
-    let newDescription = null;
+    let newDescription: string | null = null;
     try {
       const openaiConfig = process.env.OPENAI_API_KEY ? { apiKey: process.env.OPENAI_API_KEY } : null;
 
@@ -2329,7 +2327,7 @@ router.post('/books/:bookId/pages/:pageId/regenerate-description', authenticateT
 // Upload Routes
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-const handleMulterError = (error: any, req: Request, res: Response, next: NextFunction) => {
+const handleMulterError = (error: any, _req: Request, res: Response, next: NextFunction) => {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(413).json({ error: 'File too large. Maximum size is 50MB.' });
@@ -2353,7 +2351,7 @@ const upload = multer({
     fileSize: 50 * 1024 * 1024, // 50MB limit
     fieldSize: 50 * 1024 * 1024, // 50MB field size limit
   },
-  fileFilter: (req, file, cb) => {
+  fileFilter: (_req, file, cb) => {
     // Allow only specific file types
     const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
     if (allowedTypes.includes(file.mimetype)) {
@@ -2404,7 +2402,7 @@ router.post('/upload/book', authenticateToken, requireRole(['parent', 'admin']),
     const filePath = `books/${fileName}`;
 
     // Upload file to Supabase Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    const { data: _uploadData, error: uploadError } = await supabase.storage
       .from('book-files')
       .upload(filePath, req.file.buffer, {
         contentType: req.file.mimetype,
@@ -2596,8 +2594,8 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
       return;
     }
 
-    const uploadedPages = [];
-    const failedUploads: { filename: string; error: string; }[] = [];
+    const uploadedPages: Array<{ id: string; page_number: number; image_url: string; filename: string }> = [];
+    const failedUploads: Array<{ filename: string; error: string }> = [];
 
     // Process each file
     for (let i = 0; i < files.length; i++) {
@@ -2610,7 +2608,7 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
         const filePath = `book-pages/${bookId}/${fileName}`;
 
         // Upload file to Supabase Storage
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { data: _uploadData, error: uploadError } = await supabase.storage
           .from('book-files')
           .upload(filePath, file.buffer, {
             contentType: file.mimetype,
@@ -2628,7 +2626,7 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
           .getPublicUrl(filePath);
 
         // Analyze image with AI (optional, non-blocking)
-        let imageDescription = null;
+        let imageDescription: string | null = null;
         try {
           // Import OpenAI configuration
           const openaiConfig = process.env.OPENAI_API_KEY ? {
