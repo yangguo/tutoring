@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { authenticateToken } from '../utils/jwt';
+import { authenticateToken } from '../utils/jwt.js';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -133,7 +133,7 @@ export const speakingPracticeChat = async (req: Request, res: Response) => {
       timestamp: new Date().toISOString()
     });
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error in speaking practice chat:', error);
     res.status(500).json({ 
       error: 'Failed to process chat message',

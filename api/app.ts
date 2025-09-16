@@ -9,13 +9,7 @@ import rateLimit from 'express-rate-limit';
 import path from 'path';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
-import authRoutes from './routes/auth.js';
-import uploadRoutes from './routes/upload.js';
-import booksRoutes from './routes/books.js';
-import achievementsRoutes from './routes/achievements.js';
-import dashboardRoutes from './routes/dashboard.js';
-import chatRoutes from './routes/chat.js';
-import regenerateRoutes from './routes/regenerate.js';
+import apiRoutes from './router.js';
 import { runAllChecks } from './utils/health.js';
 
 // for esm mode
@@ -35,7 +29,7 @@ const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: process.env.NODE_ENV === 'production' ? 100 : 10000, // Very lenient in development
   message: 'Too many requests from this IP, please try again later.',
-  skip: (req) => {
+  skip: (_req) => {
     // Skip rate limiting for development environment
     return process.env.NODE_ENV !== 'production';
   }
@@ -51,22 +45,35 @@ app.use(cors({
 }));
 
 // Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Body parsing middleware
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Request timeout middleware for uploads
+app.use('/api/upload', (req: Request, res: Response, next: NextFunction) => {
+  // Set longer timeout for upload requests (5 minutes)
+  req.setTimeout(300000);
+  res.setTimeout(300000);
+  next();
+});
+
+
+// Request timeout middleware for uploads
+app.use('/api/upload', (req: Request, res: Response, next: NextFunction) => {
+  // Set longer timeout for upload requests (5 minutes)
+  req.setTimeout(300000);
+  res.setTimeout(300000);
+  next();
+});
 
 // API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/upload', uploadRoutes);
-app.use('/api/books', booksRoutes);
-app.use('/api/books', regenerateRoutes);
-app.use('/api/achievements', achievementsRoutes);
-app.use('/api/dashboard', dashboardRoutes);
-app.use('/api/chat', chatRoutes);
+app.use('/api', apiRoutes);
 
 /**
  * health
  */
-app.use('/api/health', (req: Request, res: Response, next: NextFunction): void => {
+app.use('/api/health', (_req: Request, res: Response, _next: NextFunction): void => {
   res.status(200).json({
     success: true,
     message: 'ok',
@@ -87,7 +94,7 @@ app.get('/api/health/checks', async (_req: Request, res: Response) => {
 });
 
 // API documentation endpoint
-app.get('/api', (req: Request, res: Response) => {
+app.get('/api', (_req: Request, res: Response) => {
   res.json({
     message: 'Interactive English Tutor API',
     version: '1.0.0',
@@ -143,7 +150,7 @@ app.get('/api', (req: Request, res: Response) => {
 /**
  * error handler middleware
  */
-app.use((error: Error, req: Request, res: Response, next: NextFunction) => {
+app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Global error handler:', error);
   
   // Multer errors

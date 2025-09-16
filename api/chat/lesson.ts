@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { authenticateToken } from '../utils/jwt';
+import { authenticateToken } from '../utils/jwt.js';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -42,9 +42,9 @@ interface ChatRequest {
 }
 
 // Mock AI response function - replace with actual AI service integration
-const generateAIResponse = async (message: string, history: ChatMessage[], context: { book: BookContext; lesson: LessonContext; currentPage?: PageContext }): Promise<string> => {
+const generateAIResponse = async (message: string, _history: ChatMessage[], context: { book: BookContext; lesson: LessonContext; currentPage?: PageContext }): Promise<string> => {
   // Create a comprehensive system prompt with lesson and book context
-  const systemPrompt = `You are an AI tutor helping a student with a specific lesson. Here's the context:
+  /* const systemPrompt = `You are an AI tutor helping a student with a specific lesson. Here's the context:
 
 LESSON INFORMATION:
 - Title: ${context.lesson.title}
@@ -74,7 +74,7 @@ Your role is to:
 
 IMPORTANT: Use the book description as context to understand the story, but don't output the full description to students. Instead, ask engaging questions and guide discussion based on your understanding of the content.
 
-Be encouraging, patient, and educational. Tailor your responses to the student's level and the lesson objectives.`;
+Be encouraging, patient, and educational. Tailor your responses to the student's level and the lesson objectives.`; */
 
   // Simple mock responses based on common patterns
   const lowerMessage = message.toLowerCase();

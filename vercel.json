@@ -6,8 +6,11 @@
       "use": "@vercel/node"
     },
     {
-      "src": "dist/**",
-      "use": "@vercel/static"
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "dist"
+      }
     }
   ],
   "routes": [
@@ -17,12 +20,22 @@
     },
     {
       "src": "/(.*)",
-      "dest": "/dist/$1"
+      "dest": "/index.html"
     }
   ],
   "functions": {
     "api/index.ts": {
-      "maxDuration": 30
+      "maxDuration": 30,
+      "include": [
+        "api/index.ts",
+        "api/app.ts",
+        "api/router.ts",
+        "api/chat/lesson.ts",
+        "api/chat/speaking-practice.ts",
+        "api/config/supabase.ts",
+        "api/utils/jwt.ts",
+        "api/utils/health.ts"
+      ]
     }
   }
 }

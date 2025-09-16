@@ -43,5 +43,18 @@ export default defineConfig({
         },
       }
     }
+  },
+  build: {
+    outDir: 'dist',
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom'],
+          supabase: ['@supabase/supabase-js'],
+          vendor: ['react-router-dom', 'zustand']
+        }
+      }
+    }
   }
 })
+
