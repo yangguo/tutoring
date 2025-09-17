@@ -3,7 +3,7 @@ import { type User } from '../config/supabase';
 import { Request, Response, NextFunction } from 'express';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key';
-const JWT_EXPIRES_IN = parseInt(process.env.JWT_EXPIRES_IN || '604800', 10); // 7 days in seconds
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d'; // Use string format for jsonwebtoken
 
 export interface JWTPayload {
   userId: string;
@@ -23,11 +23,8 @@ export const generateToken = (user: User): string => {
     role: user.role
   };
 
-  const options: jwt.SignOptions = {
-    expiresIn: JWT_EXPIRES_IN
-  };
-
-  return jwt.sign(payload, JWT_SECRET, options);
+  // @ts-ignore - JWT accepts string format like '7d', '24h' etc.
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 };
 
 /**
