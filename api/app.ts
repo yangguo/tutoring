@@ -40,7 +40,7 @@ app.use('/api/', limiter);
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
     ? ['https://your-domain.com'] // Replace with your production domain
-    : ['http://localhost:3000', 'http://localhost:5173'], // Development origins
+    : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174'], // Development origins
   credentials: true
 }));
 

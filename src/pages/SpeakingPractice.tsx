@@ -4,6 +4,7 @@ import { Mic, MicOff, Play, Pause, RotateCcw, CheckCircle, XCircle, ArrowLeft, V
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
 import { api } from '../lib/api';
+import { useAuthStore } from '../stores/authStore';
 import type { Book, BookPage, DiscussionMessage } from '../lib/api';
 
 // TypeScript declarations for SpeechRecognition
@@ -12,6 +13,32 @@ declare global {
     SpeechRecognition: any;
     webkitSpeechRecognition: any;
   }
+}
+
+interface SpeechRecognitionEvent extends Event {
+  resultIndex: number;
+  results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+  message?: string;
+}
+
+interface SpeechRecognitionResultList {
+  length: number;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+  length: number;
+  isFinal: boolean;
+  [index: number]: SpeechRecognitionAlternative;
+}
+
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
 }
 
 interface SpeechRecognition extends EventTarget {
@@ -23,8 +50,8 @@ interface SpeechRecognition extends EventTarget {
   abort(): void;
   onstart: ((this: SpeechRecognition, ev: Event) => any) | null;
   onend: ((this: SpeechRecognition, ev: Event) => any) | null;
-  onresult: ((this: SpeechRecognition, ev: any) => any) | null;
-  onerror: ((this: SpeechRecognition, ev: any) => any) | null;
+  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => any) | null;
+  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => any) | null;
 }
 
 interface SpeakingSessionData {
@@ -37,13 +64,9 @@ interface SpeakingSessionData {
   accuracy_score: number;
 }
 
-interface RecognitionResult {
-  transcript: string;
-  confidence: number;
-}
-
 const SpeakingPractice: React.FC = () => {
   const navigate = useNavigate();
+  const { isAuthenticated, isLoading: authLoading } = useAuthStore();
   const [books, setBooks] = useState<Book[]>([]);
   const [selectedBook, setSelectedBook] = useState<Book | null>(null);
   const [bookPages, setBookPages] = useState<BookPage[]>([]);
@@ -71,10 +94,7 @@ const SpeakingPractice: React.FC = () => {
   
   // Chat functionality
   const [chatMessages, setChatMessages] = useState<DiscussionMessage[]>([]);
-  const [chatInput, setChatInput] = useState('');
   const [isChatMode, setIsChatMode] = useState(false);
-  const [isVoiceMode, setIsVoiceMode] = useState(false);
-  const [isSendingMessage, setIsSendingMessage] = useState(false);
   
   // LLM Chat sidebar functionality
   const [llmChatMessages, setLlmChatMessages] = useState<{role: 'user' | 'assistant', content: string, timestamp: Date}[]>([]);
@@ -89,7 +109,6 @@ const SpeakingPractice: React.FC = () => {
   const [speechSynthesis, setSpeechSynthesis] = useState<SpeechSynthesis | null>(null);
   
   const recognitionRef = useRef<SpeechRecognition | null>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const chatMessagesEndRef = useRef<HTMLDivElement>(null);
@@ -97,17 +116,23 @@ const SpeakingPractice: React.FC = () => {
   const speechUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
   useEffect(() => {
-    fetchBooks();
     initializeSpeechRecognition();
     initializeVoiceFunctionality();
     setCurrentText(practiceTexts[0]);
   }, []);
 
+  // Separate useEffect for API calls that depend on authentication
+  useEffect(() => {
+    if (isAuthenticated && !authLoading) {
+      fetchBooks();
+    }
+  }, [isAuthenticated, authLoading]);
+
   // Cleanup speech synthesis on component unmount
   useEffect(() => {
     return () => {
       if (speechSynthesis) {
-        speechSynthesis.cancel();
+        window.speechSynthesis.cancel();
       }
       if (voiceRecognitionRef.current) {
         voiceRecognitionRef.current.abort();
@@ -153,7 +178,7 @@ const SpeakingPractice: React.FC = () => {
         setIsListening(true);
       };
       
-      recognition.onresult = (event) => {
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
         let transcript = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
           transcript += event.results[i][0].transcript;
@@ -172,7 +197,7 @@ const SpeakingPractice: React.FC = () => {
         setIsVoiceInputActive(false);
       };
       
-      recognition.onerror = (event) => {
+      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
         console.error('Voice recognition error:', event.error);
         setIsListening(false);
         setIsVoiceInputActive(false);
@@ -216,8 +241,8 @@ const SpeakingPractice: React.FC = () => {
     }
     
     // Check if speech synthesis is ready
-    if (speechSynthesis.speaking || speechSynthesis.pending) {
-      speechSynthesis.cancel();
+    if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+      window.speechSynthesis.cancel();
       // Wait a bit before starting new speech
       setTimeout(() => speakText(text), 100);
       return;
@@ -242,7 +267,7 @@ const SpeakingPractice: React.FC = () => {
       const utterance = new SpeechSynthesisUtterance(cleanText);
       
       // Get available voices and use a preferred one if available
-      const voices = speechSynthesis.getVoices();
+      const voices = window.speechSynthesis.getVoices();
       const englishVoice = voices.find(voice => voice.lang.startsWith('en'));
       if (englishVoice) {
         utterance.voice = englishVoice;
@@ -275,7 +300,7 @@ const SpeakingPractice: React.FC = () => {
       };
       
       speechUtteranceRef.current = utterance;
-      speechSynthesis.speak(utterance);
+      window.speechSynthesis.speak(utterance);
       
     } catch (error) {
       console.error('Error creating speech utterance:', error);
@@ -287,7 +312,7 @@ const SpeakingPractice: React.FC = () => {
   const stopSpeaking = () => {
     if (speechSynthesis) {
       try {
-        speechSynthesis.cancel();
+        window.speechSynthesis.cancel();
         
         // Force stop the current utterance if it exists
         if (speechUtteranceRef.current) {
@@ -386,302 +411,35 @@ const SpeakingPractice: React.FC = () => {
     }
   };
 
-  const sendChatMessage = async () => {
-    if (!chatInput.trim() || !selectedBook || isSendingMessage) return;
-    
-    const userMessage: DiscussionMessage = {
-      id: Date.now().toString(),
-      type: 'user',
-      content: chatInput.trim(),
-      timestamp: new Date().toISOString(),
-      page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
-    };
-    
-    setChatMessages(prev => [...prev, userMessage]);
-    setChatInput('');
-    setIsSendingMessage(true);
-    
-    try {
-      // Create context for the AI
-      const currentPage = bookPages[currentPageIndex];
-      const context = {
-        book: {
-          title: selectedBook.title,
-          author: selectedBook.author,
-          description: selectedBook.description || '',
-          difficulty_level: selectedBook.difficulty_level,
-          target_age: selectedBook.age_range,
-          page_count: selectedBook.page_count
-        },
-        lesson: {
-          title: `Book Discussion: ${selectedBook.title}`,
-          description: `Interactive discussion about "${selectedBook.title}" by ${selectedBook.author}`,
-          objectives: [
-            'Understand the story and characters',
-            'Improve reading comprehension',
-            'Practice verbal communication',
-            'Develop critical thinking skills'
-          ],
-          activities: [
-            'Page-by-page discussion',
-            'Character analysis',
-            'Theme exploration',
-            'Vocabulary building'
-          ],
-          target_level: selectedBook.difficulty_level,
-          duration: 30
-        },
-        currentPage: currentPage ? {
-          number: currentPageIndex + 1,
-          text: currentPage.text_content || '',
-          description: currentPage.image_description || '',
-          image_url: currentPage.image_url || ''
-        } : null
-      };
-      
-      const response = await fetch('/api/chat/lesson', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          message: userMessage.content,
-          history: chatMessages.map(msg => ({
-            role: msg.type === 'user' ? 'user' : 'assistant',
-            content: msg.content
-          })),
-          context
-        })
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to get AI response');
-      }
-      
-      const data = await response.json();
-      
-      const aiMessage: DiscussionMessage = {
-        id: (Date.now() + 1).toString(),
-        type: 'ai',
-        content: data.response || 'I\'m here to help you discuss this book! What would you like to talk about?',
-        timestamp: new Date().toISOString(),
-        page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
-      };
-      
-      setChatMessages(prev => [...prev, aiMessage]);
-    } catch (error) {
-      console.error('Error sending chat message:', error);
-      toast.error('Failed to send message');
-      
-      // Fallback AI response
-      const fallbackMessage: DiscussionMessage = {
-        id: (Date.now() + 1).toString(),
-        type: 'ai',
-        content: `That's an interesting point about "${selectedBook?.title}"! I'd love to discuss this further. What specific aspect of ${bookPages.length > 0 ? `page ${currentPageIndex + 1}` : 'the book'} would you like to explore?`,
-        timestamp: new Date().toISOString(),
-        page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
-      };
-      
-      setChatMessages(prev => [...prev, fallbackMessage]);
-    } finally {
-      setIsSendingMessage(false);
-    }
-  };
 
-  const handleVoiceChat = () => {
-    if (isVoiceMode) {
-      // Stop voice mode
-      setIsVoiceMode(false);
-      if (recognitionRef.current) {
-        recognitionRef.current.stop();
-      }
-    } else {
-      // Start voice mode for chat
-      setIsVoiceMode(true);
-      if (recognitionRef.current) {
-        // Configure recognition for chat mode
-        recognitionRef.current.continuous = false;
-        recognitionRef.current.interimResults = false;
-        recognitionRef.current.lang = 'en-US';
-        
-        recognitionRef.current.onresult = (event: any) => {
-          const result = event.results[0][0];
-          const transcript = result.transcript.trim();
-          
-          if (transcript) {
-            setChatInput(transcript);
-            setIsVoiceMode(false);
-            
-            // Auto-send the voice message after a short delay
-            setTimeout(() => {
-              if (transcript && !isSendingMessage) {
-                sendVoiceMessage(transcript);
-              }
-            }, 500);
-          }
-        };
-        
-        recognitionRef.current.onerror = (event: any) => {
-          console.error('Speech recognition error:', event.error);
-          setIsVoiceMode(false);
-          toast.error('Voice recognition failed. Please try again.');
-        };
-        
-        recognitionRef.current.onend = () => {
-          setIsVoiceMode(false);
-        };
-        
-        try {
-          recognitionRef.current.start();
-          toast.success('Listening... Speak your message!');
-        } catch (error) {
-          console.error('Failed to start voice recognition:', error);
-          setIsVoiceMode(false);
-          toast.error('Failed to start voice recognition');
-        }
-      } else {
-        toast.error('Voice recognition not supported in this browser');
-      }
-    }
-  };
-  
-  const sendVoiceMessage = async (transcript: string) => {
-    if (!transcript.trim() || !selectedBook || isSendingMessage) return;
-    
-    const userMessage: DiscussionMessage = {
-      id: Date.now().toString(),
-      type: 'user',
-      content: transcript,
-      timestamp: new Date().toISOString(),
-      page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
-    };
-    
-    setChatMessages(prev => [...prev, userMessage]);
-    setChatInput('');
-    setIsSendingMessage(true);
-    
-    try {
-      // Create context for the AI
-      const currentPage = bookPages[currentPageIndex];
-      const context = {
-        book: {
-          title: selectedBook.title,
-          author: selectedBook.author,
-          description: selectedBook.description || '',
-          difficulty_level: selectedBook.difficulty_level,
-          target_age: selectedBook.age_range,
-          page_count: selectedBook.page_count
-        },
-        lesson: {
-          title: `Book Discussion: ${selectedBook.title}`,
-          description: `Interactive discussion about "${selectedBook.title}" by ${selectedBook.author}`,
-          objectives: [
-            'Understand the story and characters',
-            'Improve reading comprehension',
-            'Practice verbal communication',
-            'Develop critical thinking skills'
-          ],
-          activities: [
-            'Page-by-page discussion',
-            'Character analysis',
-            'Theme exploration',
-            'Vocabulary building'
-          ],
-          target_level: selectedBook.difficulty_level,
-          duration: 30
-        },
-        currentPage: currentPage ? {
-          number: currentPageIndex + 1,
-          text: currentPage.text_content || '',
-          description: currentPage.image_description || '',
-          image_url: currentPage.image_url || ''
-        } : null
-      };
-      
-      const response = await fetch('/api/chat/lesson', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        },
-        body: JSON.stringify({
-          message: userMessage.content,
-          history: chatMessages.map(msg => ({
-            role: msg.type === 'user' ? 'user' : 'assistant',
-            content: msg.content
-          })),
-          context
-        })
-      });
-      
-      if (!response.ok) {
-        throw new Error('Failed to get AI response');
-      }
-      
-      const data = await response.json();
-      
-      const aiMessage: DiscussionMessage = {
-        id: (Date.now() + 1).toString(),
-        type: 'ai',
-        content: data.response || 'I\'m here to help you discuss this book! What would you like to talk about?',
-        timestamp: new Date().toISOString(),
-        page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
-      };
-      
-      setChatMessages(prev => [...prev, aiMessage]);
-      
-      // Read the AI response aloud
-      if ('speechSynthesis' in window) {
-        const utterance = new SpeechSynthesisUtterance(aiMessage.content);
-        utterance.rate = 0.8;
-        utterance.pitch = 1;
-        utterance.volume = 0.8;
-        speechSynthesis.speak(utterance);
-      }
-      
-    } catch (error) {
-      console.error('Error sending voice message:', error);
-      toast.error('Failed to send voice message');
-      
-      // Fallback AI response
-      const fallbackMessage: DiscussionMessage = {
-        id: (Date.now() + 1).toString(),
-        type: 'ai',
-        content: `That's an interesting point about "${selectedBook?.title}"! I'd love to discuss this further. What specific aspect of ${bookPages.length > 0 ? `page ${currentPageIndex + 1}` : 'the book'} would you like to explore?`,
-        timestamp: new Date().toISOString(),
-        page_number: bookPages.length > 0 ? currentPageIndex + 1 : undefined
-      };
-      
-      setChatMessages(prev => [...prev, fallbackMessage]);
-    } finally {
-      setIsSendingMessage(false);
-    }
-  };
+
+
 
   const initializeSpeechRecognition = () => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
       
-      recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = false;
-      recognitionRef.current.lang = 'en-US';
-      
-      recognitionRef.current.onresult = (event: any) => {
-         const result = event.results[0][0];
-         setTranscript(result.transcript);
-       };
-      
-      recognitionRef.current.onerror = (event: any) => {
-        console.error('Speech recognition error:', event.error);
-        toast.error('Speech recognition failed. Please try again.');
-        setIsRecording(false);
-      };
-      
-      recognitionRef.current.onend = () => {
-        setIsRecording(false);
-      };
+      if (recognitionRef.current) {
+        recognitionRef.current.continuous = false;
+        recognitionRef.current.interimResults = false;
+        recognitionRef.current.lang = 'en-US';
+        
+        recognitionRef.current.onresult = (event: any) => {
+           const result = event.results[0][0];
+           setTranscript(result.transcript);
+         };
+        
+        recognitionRef.current.onerror = (event: any) => {
+          console.error('Speech recognition error:', event.error);
+          toast.error('Speech recognition failed. Please try again.');
+          setIsRecording(false);
+        };
+        
+        recognitionRef.current.onend = () => {
+          setIsRecording(false);
+        };
+      }
     } else {
       toast.error('Speech recognition is not supported in this browser.');
     }
@@ -813,15 +571,15 @@ const SpeakingPractice: React.FC = () => {
       utterance.onstart = () => setIsPlaying(true);
       utterance.onend = () => setIsPlaying(false);
       
-      speechSynthesis.speak(utterance);
+      window.speechSynthesis.speak(utterance);
     }
   };
 
   const resetPractice = () => {
     setTranscript('');
     setFeedback(null);
-    if (speechSynthesis.speaking) {
-      speechSynthesis.cancel();
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
       setIsPlaying(false);
     }
   };
@@ -1103,7 +861,30 @@ const SpeakingPractice: React.FC = () => {
               ) : (
                 /* Speaking Practice Mode */
                 <div className="bg-white rounded-xl shadow-lg p-6">
-                  <h3 className="text-lg font-semibold text-gray-800 mb-4">Practice Text</h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-semibold text-gray-800">Practice Text</h3>
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => setSelectedTextIndex(Math.max(0, selectedTextIndex - 1))}
+                        disabled={selectedTextIndex === 0}
+                        className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="Previous text"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <span className="text-sm text-gray-600 px-2">
+                        {selectedTextIndex + 1} / {practiceTexts.length}
+                      </span>
+                      <button
+                        onClick={() => setSelectedTextIndex(Math.min(practiceTexts.length - 1, selectedTextIndex + 1))}
+                        disabled={selectedTextIndex === practiceTexts.length - 1}
+                        className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        title="Next text"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
                   <div className="bg-gray-50 rounded-lg p-4 mb-6">
                     <p className="text-gray-800 leading-relaxed text-lg">
                       {practiceTexts[selectedTextIndex]}
