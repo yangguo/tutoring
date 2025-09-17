@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
-import { Calendar, Users, BookOpen, TrendingUp, Award, Clock, Target, Plus, Edit, Trash2, Eye, Check } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
+import { Users, BookOpen, TrendingUp, Award, Clock, Plus, Edit, Trash2, Eye, Check } from 'lucide-react';
 import { useAuthStore } from "../stores/authStore";
 import { api, type Book } from '../lib/api';
 
@@ -45,7 +45,7 @@ const Dashboard: React.FC = () => {
   const [students, setStudents] = useState<Student[]>([]);
   const [lessonPlans, setLessonPlans] = useState<LessonPlan[]>([]);
   const [progressData, setProgressData] = useState<ProgressData[]>([]);
-  const [selectedStudent, setSelectedStudent] = useState<string>('');
+
   const [activeTab, setActiveTab] = useState<'overview' | 'students' | 'lessons' | 'analytics' | 'books' | 'my-lessons' | 'achievements' | 'users' | 'content'>('overview');
   const [showLessonForm, setShowLessonForm] = useState(false);
   const [editingLesson, setEditingLesson] = useState<LessonPlan | null>(null);
@@ -292,7 +292,7 @@ const Dashboard: React.FC = () => {
           <div className="border-b border-gray-200">
             <nav className="-mb-px flex space-x-8">
               {(() => {
-                let tabs = [];
+                let tabs: { id: string; label: string; icon: any }[] = [];
                 if (userRole === 'child') {
                   tabs = [
                     { id: 'overview', label: 'My Progress', icon: TrendingUp },
@@ -656,7 +656,7 @@ const Dashboard: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                         <button 
-                          onClick={() => setSelectedStudent(student.id)}
+                          onClick={() => {/* View student details */}}
                           className="text-purple-600 hover:text-purple-900 mr-3"
                         >
                           <Eye className="h-4 w-4" />
@@ -859,39 +859,7 @@ const LessonPlanForm: React.FC<LessonPlanFormProps> = ({ lesson, onSave, onCance
     onSave(formData);
   };
 
-  const addObjective = () => {
-    setFormData({ ...formData, objectives: [...formData.objectives, ''] });
-  };
 
-  const removeObjective = (index: number) => {
-    setFormData({ 
-      ...formData, 
-      objectives: formData.objectives.filter((_, i) => i !== index) 
-    });
-  };
-
-  const updateObjective = (index: number, value: string) => {
-    const newObjectives = [...formData.objectives];
-    newObjectives[index] = value;
-    setFormData({ ...formData, objectives: newObjectives });
-  };
-
-  const addActivity = () => {
-    setFormData({ ...formData, activities: [...formData.activities, ''] });
-  };
-
-  const removeActivity = (index: number) => {
-    setFormData({ 
-      ...formData, 
-      activities: formData.activities.filter((_, i) => i !== index) 
-    });
-  };
-
-  const updateActivity = (index: number, value: string) => {
-    const newActivities = [...formData.activities];
-    newActivities[index] = value;
-    setFormData({ ...formData, activities: newActivities });
-  };
   
   const toggleStudentSelection = (studentId: string) => {
     const isSelected = formData.assignedStudents.includes(studentId);

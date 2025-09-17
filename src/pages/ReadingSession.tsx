@@ -19,18 +19,13 @@ import {
   MessageCircle,
   RefreshCw
 } from 'lucide-react';
-import { api, Book, BookPage, VocabularyWord, DiscussionMessage } from '../lib/api';
+import { api, Book, BookPage, DiscussionMessage } from '../lib/api';
 import ChatInterface from '../components/ChatInterface';
 import { convertPdfFileToImages } from '../lib/pdf';
 
 
 
-interface ReadingSessionData {
-  book_id: string;
-  pages_read: number[];
-  time_spent: number;
-  comprehension_score?: number;
-}
+
 
 const ReadingSession: React.FC = () => {
   const { bookId } = useParams<{ bookId: string }>();
@@ -55,8 +50,6 @@ const ReadingSession: React.FC = () => {
   const [highContrastMode, setHighContrastMode] = useState(false);
   const [autoReadDescriptions, setAutoReadDescriptions] = useState(false);
   const [showDiscussion, setShowDiscussion] = useState(false);
-  const [discussionMessages, setDiscussionMessages] = useState<DiscussionMessage[]>([]);
-  const [loadingDiscussion, setLoadingDiscussion] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [convertingPdf, setConvertingPdf] = useState(false);
   const [conversionMessage, setConversionMessage] = useState<string | null>(null);
@@ -110,16 +103,14 @@ const ReadingSession: React.FC = () => {
         });
       });
       
-      setDiscussionMessages(messages);
+      // Discussion messages loaded but not stored in state
     } catch (error) {
       console.error('Failed to load discussion history:', error);
     }
   };
 
-  const handleSendMessage = async (message: string, history: { role: string; content: string; }[]): Promise<string> => {
+  const handleSendMessage = async (message: string): Promise<string> => {
     if (!book?.id || !message.trim()) return "I'm sorry, I couldn't process your message.";
-    
-    setLoadingDiscussion(true);
     
     try {
       const response = await api.discussBook(
@@ -132,8 +123,6 @@ const ReadingSession: React.FC = () => {
     } catch (error) {
       console.error('Failed to send message:', error);
       throw new Error('Failed to send message. Please try again.');
-    } finally {
-      setLoadingDiscussion(false);
     }
   };
 
@@ -387,7 +376,7 @@ const ReadingSession: React.FC = () => {
       }
     } catch (error) {
       console.error('Error regenerating description:', error);
-      toast.error(error.message);
+      toast.error(error instanceof Error ? error.message : 'Failed to regenerate description');
     } finally {
       setRegenerating(false);
     }

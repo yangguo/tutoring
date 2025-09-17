@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, Trophy, Star, Medal, Award, Lock, CheckCircle, Target, TrendingUp } from 'lucide-react';
+import { ArrowLeft, Trophy, Star, Medal, Award, Lock, CheckCircle, TrendingUp } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
@@ -265,7 +265,7 @@ const Achievements: React.FC = () => {
                       <p>No leaderboard data available.</p>
                     </div>
                   ) : (
-                    leaderboard.map((entry, index) => (
+                    leaderboard.map((entry) => (
                       <div 
                         key={entry.user_id} 
                         className={`p-4 flex items-center justify-between ${

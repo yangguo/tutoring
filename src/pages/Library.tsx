@@ -1,10 +1,10 @@
 /**
  * Library page component - Browse and select books
  */
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Search, Filter, BookOpen, Star, Clock, Users, ChevronDown } from 'lucide-react';
+import { Search, Filter, BookOpen, Clock, ChevronDown } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { Book } from '../lib/api';
 
@@ -94,7 +94,7 @@ export default function Library() {
       filtered = filtered.filter(book => 
         book.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         book.author.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        book.description.toLowerCase().includes(searchQuery.toLowerCase())
+        book.description?.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
 

@@ -11,7 +11,6 @@ import {
   Trophy, 
   User, 
   LogOut, 
-  Settings,
   Upload,
   BarChart3,
   Menu,
