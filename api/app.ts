@@ -39,7 +39,7 @@ app.use('/api/', limiter);
 // CORS configuration
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://your-domain.com'] // Replace with your production domain
+    ? true  // Allow same origin in production (works with blank VITE_API_URL)
     : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174'], // Development origins
   credentials: true
 }));

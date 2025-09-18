@@ -114,7 +114,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   checkAuth: async () => {
     const token = localStorage.getItem('auth_token');
     if (!token) {
-      set({ isAuthenticated: false, user: null });
+      set({ isAuthenticated: false, user: null, isLoading: false });
       return;
     }
 
@@ -136,6 +136,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         isLoading: false 
       });
       console.error('Auth check failed:', error);
+      // Don't show error toast for failed auth check on page load
     }
   },
 

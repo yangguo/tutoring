@@ -2,7 +2,7 @@
  * API utilities for the Interactive English Tutor frontend
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+const API_BASE_URL = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : '');
 
 export interface User {
   id: string;
@@ -129,11 +129,18 @@ class ApiClient {
       headers.Authorization = `Bearer ${this.token}`;
     }
 
+    // Add timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
     try {
       const response = await fetch(url, {
         ...options,
         headers,
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Network error' }));
@@ -142,9 +149,16 @@ class ApiClient {
 
       return response.json();
     } catch (error) {
+      clearTimeout(timeoutId);
+      
       // Handle network errors and other fetch failures
-      if (error instanceof TypeError && error.message.includes('fetch')) {
-        throw new Error('Failed to connect to server. Please check your internet connection.');
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          throw new Error('Request timeout. Please check your internet connection.');
+        }
+        if (error.message.includes('fetch')) {
+          throw new Error('Failed to connect to server. Please check your internet connection.');
+        }
       }
       throw error;
     }
