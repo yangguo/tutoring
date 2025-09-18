@@ -120,8 +120,6 @@ class ApiClient {
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
-    console.log('Making API request to:', url);
-    
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),
@@ -143,7 +141,6 @@ class ApiClient {
       });
 
       clearTimeout(timeoutId);
-      console.log('API response:', response.status, response.statusText);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ error: 'Network error' }));
@@ -153,7 +150,6 @@ class ApiClient {
       return response.json();
     } catch (error) {
       clearTimeout(timeoutId);
-      console.error('API request failed:', url, error);
       
       // Handle network errors and other fetch failures
       if (error instanceof Error) {

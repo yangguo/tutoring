@@ -112,28 +112,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   checkAuth: async () => {
-    console.log('Starting auth check...');
-    
     // Safety timeout to prevent infinite loading
     const timeoutId = setTimeout(() => {
-      console.log('Auth check timeout, setting unauthenticated');
       set({ isAuthenticated: false, user: null, isLoading: false });
     }, 10000); // 10 second timeout
 
     const token = localStorage.getItem('auth_token');
     if (!token) {
-      console.log('No token found, setting unauthenticated');
       clearTimeout(timeoutId);
       set({ isAuthenticated: false, user: null, isLoading: false });
       return;
     }
 
-    console.log('Token found, checking with API...');
     set({ isLoading: true });
     try {
       api.setToken(token);
       const response = await api.getProfile();
-      console.log('Auth check successful:', response.user);
       clearTimeout(timeoutId);
       set({ 
         user: response.user, 
@@ -142,7 +136,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       });
     } catch (error) {
       // Token is invalid, clear it
-      console.log('Auth check failed, clearing token:', error);
       clearTimeout(timeoutId);
       api.setToken(null);
       set({ 
