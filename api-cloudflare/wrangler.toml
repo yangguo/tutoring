@@ -1,0 +1,4 @@
+name = "tutoring-api-cloudflare"
+type = "javascript"
+main = "index.ts"
+compatibility_date = "2025-09-18"
