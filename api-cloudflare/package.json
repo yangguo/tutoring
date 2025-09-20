@@ -10,10 +10,10 @@
   },
   "dependencies": {
     "hono": "^4.0.0",
-    "@supabase/supabase-js": "^2.0.0"
+    "@supabase/supabase-js": "^2.0.0",
+    "wrangler": "^3.0.0"
   },
   "devDependencies": {
-    "wrangler": "^3.0.0",
     "typescript": "^5.0.0"
   }
 }
