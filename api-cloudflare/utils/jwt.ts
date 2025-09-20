@@ -5,19 +5,26 @@ type EnvWithJwt = {
   JWT_SECRET?: string;
 };
 
-export async function verifyToken(token: string, secret: string): Promise<any> {
+export type SessionPayload = {
+  userId: string;
+  email: string;
+  role: string;
+  [key: string]: unknown;
+};
+
+export async function verifyToken(token: string, secret: string): Promise<SessionPayload | null> {
   try {
-    return await verify(token, secret);
+    return (await verify(token, secret)) as SessionPayload;
   } catch (e) {
     return null;
   }
 }
 
-export async function signToken(payload: object, secret: string) {
+export async function signToken(payload: SessionPayload, secret: string) {
   return await sign(payload, secret);
 }
 
-export const jwtMiddleware = async (c: Context<{ Bindings: EnvWithJwt }>, next: Next) => {
+export const jwtMiddleware = async (c: Context<{ Bindings: EnvWithJwt; Variables: { user: SessionPayload } }>, next: Next) => {
   const secret = c.env.JWT_SECRET;
   if (!secret) {
     return c.json({ error: 'Authentication is not configured' }, 500);
@@ -34,6 +41,6 @@ export const jwtMiddleware = async (c: Context<{ Bindings: EnvWithJwt }>, next: 
     return c.json({ error: 'Invalid or expired token' }, 401);
   }
 
-  c.set('user', payload.user || payload);
+  c.set('user', payload);
   await next();
 };

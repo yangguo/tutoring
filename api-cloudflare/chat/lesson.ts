@@ -2,9 +2,15 @@ import { Hono } from 'hono';
 import { chatWithOpenAI } from '../lib/openai';
 import { handleError } from '../utils/error';
 
-const lesson = new Hono();
+type LessonBindings = {
+  Bindings: {
+    OPENAI_API_KEY: string;
+  };
+};
 
-lesson.post('/', async (c: any) => {
+const lesson = new Hono<LessonBindings>();
+
+lesson.post('/', async (c) => {
   try {
     const { messages } = await c.req.json();
     const apiKey = c.env.OPENAI_API_KEY;

@@ -2,9 +2,15 @@ import { Hono } from 'hono';
 import { chatWithOpenAI } from '../lib/openai';
 import { handleError } from '../utils/error';
 
-const speakingPractice = new Hono();
+type SpeakingPracticeBindings = {
+  Bindings: {
+    OPENAI_API_KEY: string;
+  };
+};
 
-speakingPractice.post('/', async (c: any) => {
+const speakingPractice = new Hono<SpeakingPracticeBindings>();
+
+speakingPractice.post('/', async (c) => {
   try {
     const { messages } = await c.req.json();
     const apiKey = c.env.OPENAI_API_KEY;

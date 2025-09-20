@@ -1,7 +1,14 @@
 import { Hono } from 'hono';
 import { createSupabaseClient } from './config/supabase';
 
-const achievements = new Hono();
+type AchievementsBindings = {
+  Bindings: {
+    SUPABASE_URL: string;
+    SUPABASE_KEY: string;
+  };
+};
+
+const achievements = new Hono<AchievementsBindings>();
 
 achievements.get('/', async (c) => {
   try {

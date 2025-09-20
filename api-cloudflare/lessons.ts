@@ -1,7 +1,14 @@
 import { Hono } from 'hono';
 import { createSupabaseClient } from './config/supabase';
 
-const lessons = new Hono();
+type LessonsBindings = {
+  Bindings: {
+    SUPABASE_URL: string;
+    SUPABASE_KEY: string;
+  };
+};
+
+const lessons = new Hono<LessonsBindings>();
 
 lessons.get('/', async (c) => {
   try {

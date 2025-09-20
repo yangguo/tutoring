@@ -10,9 +10,18 @@ import lesson from './chat/lesson';
 import speakingPractice from './chat/speaking-practice';
 import { jwtMiddleware } from './utils/jwt';
 
-const app = new Hono();
+type RouterBindings = {
+  Bindings: {
+    SUPABASE_URL: string;
+    SUPABASE_KEY: string;
+    JWT_SECRET: string;
+    OPENAI_API_KEY: string;
+  };
+};
 
-app.get('/api/health', (c: any) => c.json({ status: 'ok', cloudflare: true }));
+const app = new Hono<RouterBindings>();
+
+app.get('/api/health', (c) => c.json({ status: 'ok', cloudflare: true }));
 app.route('/api/auth', auth);
 
 // Protected routes

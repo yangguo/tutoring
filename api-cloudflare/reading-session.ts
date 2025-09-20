@@ -1,7 +1,14 @@
 import { Hono } from 'hono';
 import { createSupabaseClient } from './config/supabase';
 
-const readingSession = new Hono();
+type ReadingSessionBindings = {
+  Bindings: {
+    SUPABASE_URL: string;
+    SUPABASE_KEY: string;
+  };
+};
+
+const readingSession = new Hono<ReadingSessionBindings>();
 
 readingSession.get('/', async (c) => {
   try {

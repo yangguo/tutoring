@@ -1,7 +1,14 @@
 import { Hono } from 'hono';
 import { createSupabaseClient } from './config/supabase';
 
-const vocabulary = new Hono();
+type VocabularyBindings = {
+  Bindings: {
+    SUPABASE_URL: string;
+    SUPABASE_KEY: string;
+  };
+};
+
+const vocabulary = new Hono<VocabularyBindings>();
 
 vocabulary.get('/', async (c) => {
   try {

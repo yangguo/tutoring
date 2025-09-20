@@ -1,7 +1,14 @@
 import { Hono } from 'hono';
 import { createSupabaseClient } from './config/supabase';
 
-const library = new Hono();
+type LibraryBindings = {
+  Bindings: {
+    SUPABASE_URL: string;
+    SUPABASE_KEY: string;
+  };
+};
+
+const library = new Hono<LibraryBindings>();
 
 library.get('/', async (c) => {
   try {
