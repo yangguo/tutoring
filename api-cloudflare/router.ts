@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { cors } from 'hono/cors';
 import auth from './auth';
 import library from './library';
 import lessons from './lessons';
@@ -20,6 +21,14 @@ type RouterBindings = {
 };
 
 const app = new Hono<RouterBindings>();
+
+app.use('*', cors({
+  origin: (origin) => origin ?? '*',
+  allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization'],
+  exposeHeaders: ['Content-Type'],
+  maxAge: 86400
+}));
 
 app.get('/api/health', (c) => c.json({ status: 'ok', cloudflare: true }));
 app.route('/api/auth', auth);
