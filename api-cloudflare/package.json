@@ -4,9 +4,9 @@
   "main": "index.ts",
   "type": "module",
   "scripts": {
-    "build": "npx wrangler deploy",
+    "build": "npx wrangler deploy --config wrangler.toml",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy"
+    "deploy": "npx wrangler deploy --config wrangler.toml"
   },
   "dependencies": {
     "hono": "^4.0.0",
