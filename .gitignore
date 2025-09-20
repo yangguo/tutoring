@@ -74,6 +74,10 @@ typings/
 .env.production.local
 .env.*.local
 
+# Cloudflare/Wrangler local environment variables
+# Prevent committing .dev.vars files anywhere in the repo
+.dev.vars
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache

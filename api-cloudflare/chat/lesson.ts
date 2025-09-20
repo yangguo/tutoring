@@ -7,7 +7,7 @@ const lesson = new Hono();
 lesson.post('/', async (c: any) => {
   try {
     const { messages } = await c.req.json();
-    const apiKey = process.env.OPENAI_API_KEY;
+    const apiKey = c.env.OPENAI_API_KEY;
     if (!apiKey) {
       return handleError(c, new Error('Missing OpenAI API key'), 500);
     }

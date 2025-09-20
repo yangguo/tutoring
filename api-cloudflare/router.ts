@@ -1,3 +1,4 @@
+import { Hono } from 'hono';
 import auth from './auth';
 import library from './library';
 import lessons from './lessons';
@@ -5,7 +6,9 @@ import readingSession from './reading-session';
 import achievements from './achievements';
 import vocabulary from './vocabulary';
 import upload from './upload';
-import { jwtMiddleware } from './utils/jwt'; // Corrected import
+import lesson from './chat/lesson';
+import speakingPractice from './chat/speaking-practice';
+import { jwtMiddleware } from './utils/jwt';
 
 const app = new Hono();
 
