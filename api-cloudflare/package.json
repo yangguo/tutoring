@@ -4,7 +4,7 @@
   "main": "index.ts",
   "type": "module",
   "scripts": {
-    "build": "wrangler deploy",
+    "build": "npx wrangler deploy",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
