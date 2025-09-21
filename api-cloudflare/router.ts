@@ -9,7 +9,9 @@ import vocabulary from './vocabulary';
 import upload from './upload';
 import lesson from './chat/lesson';
 import speakingPractice from './chat/speaking-practice';
+import books from './books';
 import { jwtMiddleware } from './utils/jwt';
+import dashboard from './dashboard';
 
 type RouterBindings = {
   Bindings: {
@@ -42,6 +44,7 @@ app.use('/api/vocabulary/*', jwtMiddleware);
 app.use('/api/upload/*', jwtMiddleware);
 app.use('/api/chat/lesson/*', jwtMiddleware);
 app.use('/api/chat/speaking-practice/*', jwtMiddleware);
+app.use('/api/dashboard/*', jwtMiddleware);
 
 app.route('/api/library', library);
 app.route('/api/lessons', lessons);
@@ -51,5 +54,7 @@ app.route('/api/vocabulary', vocabulary);
 app.route('/api/upload', upload);
 app.route('/api/chat/lesson', lesson);
 app.route('/api/chat/speaking-practice', speakingPractice);
+app.route('/api/books', books);
+app.route('/api/dashboard', dashboard);
 
 export default app;

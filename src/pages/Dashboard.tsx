@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
 import { Users, BookOpen, TrendingUp, Award, Clock, Plus, Edit, Trash2, Eye, Check } from 'lucide-react';
 import { useAuthStore } from "../stores/authStore";
-import { api, type Book } from '../lib/api';
+import { api, type Book, API_BASE_URL } from '../lib/api';
 
 interface Student {
   id: string;
@@ -51,6 +51,8 @@ const Dashboard: React.FC = () => {
   const [editingLesson, setEditingLesson] = useState<LessonPlan | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const buildApiUrl = (path: string) => `${API_BASE_URL.replace(/\/$/, '')}${path}`;
+
   // Get user role for conditional rendering
   const userRole = user?.role || 'child';
 
@@ -71,7 +73,7 @@ const Dashboard: React.FC = () => {
     try {
       setLoading(true);
       // Fetch students data
-      const studentsResponse = await fetch('/api/dashboard/students', {
+      const studentsResponse = await fetch(buildApiUrl('/api/dashboard/students'), {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         }
@@ -113,7 +115,7 @@ const Dashboard: React.FC = () => {
       // Fetch lesson plans - use different endpoint for students vs parents/admins
       const userRole = user?.role || 'child';
       const lessonsEndpoint = userRole === 'child' ? '/api/dashboard/my-lessons' : '/api/dashboard/lessons';
-      const lessonsResponse = await fetch(lessonsEndpoint, {
+      const lessonsResponse = await fetch(buildApiUrl(lessonsEndpoint), {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         }
@@ -140,7 +142,7 @@ const Dashboard: React.FC = () => {
       }
 
       // Fetch progress data
-      const progressResponse = await fetch('/api/dashboard/progress', {
+      const progressResponse = await fetch(buildApiUrl('/api/dashboard/progress'), {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         }
@@ -168,7 +170,7 @@ const Dashboard: React.FC = () => {
 
   const createLessonPlan = async (lessonData: Omit<LessonPlan, 'id' | 'createdAt'>) => {
     try {
-      const response = await fetch('/api/dashboard/lessons', {
+      const response = await fetch(buildApiUrl('/api/dashboard/lessons'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -197,7 +199,7 @@ const Dashboard: React.FC = () => {
 
   const updateLessonPlan = async (lessonId: string, lessonData: Partial<LessonPlan>) => {
     try {
-      const response = await fetch(`/api/dashboard/lessons/${lessonId}`, {
+      const response = await fetch(buildApiUrl(`/api/dashboard/lessons/${lessonId}`), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -225,7 +227,7 @@ const Dashboard: React.FC = () => {
 
   const deleteLessonPlan = async (lessonId: string) => {
     try {
-      const response = await fetch(`/api/dashboard/lessons/${lessonId}`, {
+      const response = await fetch(buildApiUrl(`/api/dashboard/lessons/${lessonId}`), {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`

@@ -19,7 +19,7 @@ import {
   MessageCircle,
   RefreshCw
 } from 'lucide-react';
-import { api, Book, BookPage, DiscussionMessage } from '../lib/api';
+import { api, Book, BookPage, DiscussionMessage, API_BASE_URL } from '../lib/api';
 import ChatInterface from '../components/ChatInterface';
 import { convertPdfFileToImages } from '../lib/pdf';
 
@@ -285,7 +285,7 @@ const ReadingSession: React.FC = () => {
     
     setAnalyzingImage(true);
     try {
-      const response = await fetch('/api/books/analyze-image', {
+          const response = await fetch(buildApiUrl('/api/books/analyze-image'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -336,7 +336,7 @@ const ReadingSession: React.FC = () => {
 
     setRegenerating(true);
     try {
-      const response = await fetch(`/api/books/${bookId}/pages/${currentPage.id}/regenerate-description`, {
+      const response = await fetch(buildApiUrl(`/api/books/${bookId}/pages/${currentPage.id}/regenerate-description`), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
@@ -488,7 +488,7 @@ const ReadingSession: React.FC = () => {
         pagesForm.append('pages', new File([blob], name, { type: 'image/png' }), name);
       });
 
-      const uploadResp = await fetch(`/api/upload/book/${book.id}/pages`, {
+      const uploadResp = await fetch(buildApiUrl(`/api/upload/book/${book.id}/pages`), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: pagesForm,
@@ -1003,3 +1003,4 @@ const ReadingSession: React.FC = () => {
 };
 
 export default ReadingSession;
+  const buildApiUrl = (path: string) => `${API_BASE_URL.replace(/\/$/, '')}${path}`;

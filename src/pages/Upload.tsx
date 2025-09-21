@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Upload as UploadIcon, BookOpen, AlertCircle, CheckCircle } from 'lucide-react';
 import { convertPdfFileToImages } from '../lib/pdf';
+import { API_BASE_URL } from '../lib/api';
 
 interface UploadFormData {
   title: string;
@@ -101,6 +102,8 @@ const Upload: React.FC = () => {
     }
   };
 
+  const buildApiUrl = (path: string) => `${API_BASE_URL.replace(/\/$/, '')}${path}`;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -131,7 +134,7 @@ const Upload: React.FC = () => {
         formDataToSend.append('file', formData.file);
       }
 
-      const response = await fetch('/api/upload/book', {
+      const response = await fetch(buildApiUrl('/api/upload/book'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
@@ -160,7 +163,7 @@ const Upload: React.FC = () => {
             pagesForm.append('pages', file, fileName);
           });
 
-          const pagesResp = await fetch(`/api/upload/book/${result.book.id}/pages`, {
+          const pagesResp = await fetch(buildApiUrl(`/api/upload/book/${result.book.id}/pages`), {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${token}`,

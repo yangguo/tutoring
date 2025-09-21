@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, MessageCircle, Loader2, BookOpen, Target } from 'lucide-react';
+import { API_BASE_URL } from '../lib/api';
 
 interface Message {
   id: string;
@@ -116,7 +117,7 @@ const LessonChatInterface: React.FC<LessonChatInterfaceProps> = ({
       }));
 
       // Call the AI API with lesson context
-      const response = await fetch('/api/chat/lesson', {
+      const response = await fetch(buildApiUrl('/api/chat/lesson'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -342,3 +343,4 @@ const LessonChatInterface: React.FC<LessonChatInterfaceProps> = ({
 };
 
 export default LessonChatInterface;
+  const buildApiUrl = (path: string) => `${API_BASE_URL.replace(/\/$/, '')}${path}`;

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Mic, MicOff, Play, Pause, RotateCcw, CheckCircle, XCircle, ArrowLeft, Volume2, MessageCircle, ChevronLeft, ChevronRight, BookOpen, Send, Clock, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
-import { api } from '../lib/api';
+import { api, API_BASE_URL } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
 import type { Book, BookPage, DiscussionMessage } from '../lib/api';
 
@@ -487,7 +487,7 @@ const SpeakingPractice: React.FC = () => {
     if (!transcript || !currentText) return;
 
     try {
-      const response = await fetch('/api/books/evaluate-pronunciation', {
+      const response = await fetch(buildApiUrl('/api/books/evaluate-pronunciation'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1275,3 +1275,4 @@ const SpeakingPractice: React.FC = () => {
 };
 
 export default SpeakingPractice;
+  const buildApiUrl = (path: string) => `${API_BASE_URL.replace(/\/$/, '')}${path}`;

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { BookOpen, ArrowLeft, Target, Clock, Award } from 'lucide-react';
 import LessonChatInterface from '../components/LessonChatInterface';
 import { toast } from 'sonner';
+import { API_BASE_URL } from '../lib/api';
 
 interface LessonPlan {
   id: string;
@@ -39,6 +40,8 @@ const LessonSession: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const buildApiUrl = (path: string) => `${API_BASE_URL.replace(/\/$/, '')}${path}`;
+
   useEffect(() => {
     fetchLessonData();
   }, [lessonId]);
@@ -48,7 +51,7 @@ const LessonSession: React.FC = () => {
       setLoading(true);
       
       // Fetch lesson details
-      const lessonResponse = await fetch(`/api/dashboard/my-lessons`, {
+      const lessonResponse = await fetch(buildApiUrl(`/api/dashboard/my-lessons`), {
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         }
@@ -76,7 +79,7 @@ const LessonSession: React.FC = () => {
         const results: Book[] = [];
         for (const id of currentLesson.bookIds) {
           try {
-            const resp = await fetch(`/api/books/${id}`, {
+            const resp = await fetch(buildApiUrl(`/api/books/${id}`), {
               headers: {
                 'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
               }
