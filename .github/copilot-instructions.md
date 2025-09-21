@@ -23,6 +23,23 @@ Always reference these instructions first and fallback to search or bash command
 - **Server only**: `npm run server:dev` -- Express server on port 3002 (~2s startup)
 - **Production preview**: `npm run preview` -- serves built files on `http://localhost:4173`
 
+### Dual Backend Architecture
+
+This project supports **two backend implementations**:
+
+1. **Express API (`api/`)** - Default for local development
+   - Entry: `api/server.ts` (local), `api/index.ts` (Vercel deployment)  
+   - Consolidated routes in `api/router.ts` (2800+ lines, all endpoints)
+   - Uses Express middleware, JWT auth via `api/utils/jwt.ts`
+
+2. **Cloudflare Workers API (`api-cloudflare/`)** - Alternative serverless deployment
+   - Built with Hono framework, modular route files
+   - Entry: `api-cloudflare/index.ts`, routes in `api-cloudflare/router.ts`
+   - Independent `package.json`, deploy with `wrangler deploy`
+   - Uses Cloudflare Workers bindings for environment variables
+
+**Important**: When adding features, implement in **both** backends to maintain compatibility.
+
 ### Environment Setup
 
 ALWAYS create a `.env` file before running development servers:
@@ -94,13 +111,22 @@ The lint command shows 146 existing issues - only fix lint issues directly relat
 - **Styling**: Tailwind CSS with utilities in `src/index.css`
 - **Hooks**: Custom hooks in `src/hooks/` with `useX.ts` naming
 
-### Backend (api/)
-- **Express.js + TypeScript** server
-- **Entry points**: `api/server.ts` (local), `api/index.ts` (Vercel)
-- **Routes**: Consolidated in `api/router.ts`
-- **Database**: Supabase integration via `api/config/supabase.ts`
-- **AI Features**: OpenAI integration in `api/chat/` directory
-- **Authentication**: JWT tokens via `api/utils/jwt.ts`
+### Backend - Dual Architecture
+
+**Express API (`api/`)** - Primary implementation:
+- **Express.js + TypeScript** server with comprehensive route consolidation
+- **Critical**: All 20+ API endpoints consolidated into single `api/router.ts` (2800+ lines)
+- **Entry points**: `api/server.ts` (local), `api/index.ts` (Vercel deployment)
+- **Database**: Supabase integration via `api/config/supabase.ts` with full TypeScript interfaces
+- **AI Features**: OpenAI integration in `api/chat/` directory (lesson.ts, speaking-practice.ts)
+- **Authentication**: JWT tokens via `api/utils/jwt.ts` with role-based access control
+
+**Cloudflare Workers API (`api-cloudflare/`)** - Alternative serverless:
+- **Hono framework** with modular route organization (separate files per domain)
+- **Entry**: `api-cloudflare/index.ts`, routes in `api-cloudflare/router.ts`
+- **Environment**: Uses Cloudflare Workers bindings instead of process.env
+- **Development**: `cd api-cloudflare && npm run dev` (separate package.json)
+- **Deployment**: `wrangler deploy` after `wrangler login`
 
 ### Database (supabase/)
 - **PostgreSQL** via Supabase
@@ -109,22 +135,29 @@ The lint command shows 146 existing issues - only fix lint issues directly relat
 
 ## Common Development Tasks
 
-### Adding New Features
-1. Follow existing patterns in similar components/routes
-2. Use TypeScript interfaces from `api/config/supabase.ts` for data types
-3. Test both client and server changes with `npm run dev`
-4. Validate TypeScript compilation with `npm run check`
+### Adding New API Features
+1. **Express implementation**: Add routes to `api/router.ts` following existing patterns
+2. **Cloudflare implementation**: Create new route file in `api-cloudflare/` and register in `router.ts`
+3. Use TypeScript interfaces from respective `config/supabase.ts` files
+4. Test both implementations: `npm run dev` (Express) and `cd api-cloudflare && npm run dev`
+5. Validate with `npm run check` for TypeScript compilation
+
+### Backend Architecture Patterns
+- **Express**: Single consolidated router with middleware chains (`authenticateToken`, `requireRole`)
+- **Cloudflare**: Modular Hono routes with `jwtMiddleware` applied per route group
+- **Database types**: Both backends share Supabase schema but may have separate interface files
+- **Environment variables**: Express uses `.env`, Cloudflare uses Workers bindings
 
 ### Fixing Bugs
 1. Reproduce issue in development environment
 2. Use browser dev tools for client issues
-3. Check server logs for API issues
+3. Check server logs for API issues (both Express and Cloudflare if applicable)
 4. Test fix with manual validation scenarios
 
 ### Database Changes
 1. Create new migration files in `supabase/migrations/`
 2. Keep migrations atomic and reversible
-3. Update TypeScript interfaces if schema changes
+3. Update TypeScript interfaces in both `api/config/supabase.ts` and `api-cloudflare/config/supabase.ts`
 
 ## File Organization Reference
 
@@ -146,9 +179,17 @@ tutoring/
 │   ├── scripts/                 # Database seeding scripts
 │   ├── server.ts               # Local development entry
 │   └── index.ts                # Vercel deployment entry
+├── api-cloudflare/              # Cloudflare Workers backend
+│   ├── router.ts               # Hono route orchestration
+│   ├── index.ts                # Workers entry point
+│   ├── *.ts                    # Modular route files (auth.ts, books.ts, etc.)
+│   ├── config/                  # Supabase configuration
+│   ├── chat/                    # AI chat handlers (lesson.ts, speaking-practice.ts)
+│   ├── utils/                   # Workers utilities (jwt.ts, error.ts)
+│   ├── package.json            # Separate dependency management
+│   └── wrangler.toml           # Cloudflare deployment config
 ├── supabase/migrations/         # Database migrations
 ├── public/                      # Static assets
-├── .trae/                       # Project documentation
 ├── package.json                 # Dependencies and scripts
 ├── vite.config.ts              # Vite configuration
 ├── tsconfig.json               # TypeScript configuration

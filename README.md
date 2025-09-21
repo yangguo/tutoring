@@ -23,12 +23,13 @@ An interactive web application designed to help children learn English through e
 - **Lucide React** for icons
 
 ### Backend
-- **Express.js** with TypeScript
+- **Express.js** with TypeScript (Vercel deployment)
+- **Cloudflare Workers** with Hono + TypeScript (edge deployment)
 - **JWT** authentication
 - **Supabase** (PostgreSQL) for database
-- **OpenAI API** for AI features
-- **Multer** for file uploads
-- **Helmet** and **CORS** for security
+- **OpenAI API** (configurable base URL/model) for AI features
+- **Multer** for file uploads (Express)
+- **Helmet** and **CORS** for security (Express)
 
 ### External Services
 - **Supabase** - Database and file storage
@@ -56,7 +57,7 @@ npm install
 ```
 
 ### 3. Environment Setup
-Create a `.env` file in the root directory:
+Create a `.env` file in the root directory (used by the Express API and local frontend dev):
 ```env
 # Supabase Configuration
 SUPABASE_URL=your_supabase_url
@@ -70,8 +71,19 @@ OPENAI_API_KEY=your_openai_api_key
 JWT_SECRET=your_jwt_secret
 
 # Server Configuration
-PORT=3001
+PORT=3002
 NODE_ENV=development
+```
+
+For the Cloudflare Worker, create `api-cloudflare/.dev.vars` to supply Wrangler with local secrets:
+
+```
+SUPABASE_URL=your_supabase_url
+SUPABASE_KEY=your_supabase_service_role_key
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-3.5-turbo
+JWT_SECRET=your_jwt_secret
 ```
 
 ### 4. Database Setup
@@ -90,30 +102,42 @@ npm run seed:demo
 npm run dev
 
 # Or start them separately:
-npm run client:dev  # Frontend only (port 5173)
-npm run server:dev  # Backend only (port 3001)
+npm run client:dev  # Frontend only (port 5173); ensure VITE_API_URL points to your API
+npm run server:dev  # Express backend only (port 3002)
+
+# Cloudflare Worker API (optional local dev)
+cd api-cloudflare
+npm install
+npm run dev         # Miniflare dev server at http://127.0.0.1:8787
 ```
 
 ## 📜 Available Scripts
 
-- `npm run dev` - Start both frontend and backend in development mode
+- `npm run dev` - Start frontend + Express backend in development mode
 - `npm run client:dev` - Start frontend development server
-- `npm run server:dev` - Start backend development server
+- `npm run server:dev` - Start Express backend development server
 - `npm run build` - Build the frontend for production
 - `npm run preview` - Preview the production build
 - `npm run lint` - Run ESLint
 - `npm run check` - Run TypeScript type checking
 - `npm run seed:demo` - Seed database with demo users
+- `cd api-cloudflare && npm run dev` - Run the Cloudflare Worker locally (Wrangler)
+- `cd api-cloudflare && npm run deploy` - Deploy the Worker to Cloudflare
 
 ## 📁 Project Structure
 
 ```
 tutoring/
-├── api/                    # Backend Express.js application
+├── api/                    # Backend Express.js application (Vercel)
 │   ├── routes/            # API route handlers
 │   ├── config/            # Configuration files
 │   ├── utils/             # Utility functions
 │   └── scripts/           # Database scripts
+├── api-cloudflare/        # Cloudflare Worker API (Hono)
+│   ├── chat/              # AI speaking/lesson handlers for Workers
+│   ├── config/            # Supabase bindings
+│   ├── lib/               # Shared utilities (OpenAI client, etc.)
+│   └── router.ts          # Worker router wiring
 ├── src/                   # Frontend React application
 │   ├── components/        # Reusable React components
 │   ├── pages/            # Page components
@@ -137,26 +161,36 @@ The application uses JWT-based authentication with the following user roles:
 ## 📚 API Documentation
 
 ### Authentication Endpoints
-- `POST /api/auth/register` - User registration
-- `POST /api/auth/login` - User login
+- `POST /api/auth/register` - User registration (creates Supabase auth + profile)
+- `POST /api/auth/login` - User login (returns profile + JWT)
 - `POST /api/auth/logout` - User logout
+- `GET /api/auth/me` - Fetch the authenticated user's profile
 
 ### Core Features
-- `GET /api/books` - Get user's book library
-- `POST /api/upload` - Upload new books
-- `GET /api/dashboard` - Get dashboard data
-- `POST /api/chat/lesson` - AI lesson interaction
-- `GET /api/achievements` - Get user achievements
+- `GET /api/books` - Get user's book library (filters, pagination, access control)
+- `GET /api/books/:id` - Book detail with pages (respects public/assigned access)
+- `POST /api/upload/book` - Upload new books (PDF/images)
+- `POST /api/upload/book/:id/pages` - Upload generated pages for a book
+- `GET /api/dashboard/*` - Dashboard data (students, lessons, progress, analytics)
+- `POST /api/dashboard/lessons` (`PUT`/`DELETE`) - Manage lesson plans
+- `POST /api/chat/lesson` - AI lesson interaction with lesson/book context
+- `POST /api/chat/speaking-practice` - AI speaking practice for current page
+- `GET /api/achievements` - Get user achievements & stats
 
 ## 🚀 Deployment
 
-The application is configured for deployment on Vercel:
+### Vercel (Frontend + Express API)
 
-1. Connect your repository to Vercel
-2. Configure environment variables in Vercel dashboard
-3. Deploy automatically on push to main branch
+1. Connect the repository to Vercel
+2. Configure environment variables for the frontend (`VITE_*`) and Express API (e.g., `SUPABASE_*`, `OPENAI_*`, `JWT_SECRET`) in the Vercel dashboard
+3. Deploy automatically on push to the configured branch (see `vercel.json`)
 
-See `vercel.json` for deployment configuration.
+### Cloudflare Workers (Hono API)
+
+1. Configure secrets via `.dev.vars` (local) and Wrangler/Cloudflare dashboard (production)
+   - `SUPABASE_URL`, `SUPABASE_KEY`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL`, `JWT_SECRET`
+2. From `api-cloudflare/`, run `npm run deploy` (or integrate Wrangler into Cloudflare Pages build command)
+3. Point `VITE_API_URL` in the frontend to the deployed Worker URL (workers.dev or custom domain)
 
 ## 🧪 Development Guidelines
 

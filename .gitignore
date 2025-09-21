@@ -187,3 +187,6 @@ out/
 
 # Sentry
 .sentryclirc
+  
+# Cloudflare Wrangler cache and temp files
+api-cloudflare/.wrangler/
