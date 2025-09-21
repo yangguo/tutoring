@@ -15,6 +15,7 @@ import {
   EyeOff,
   Sparkles,
   Volume1,
+  VolumeX,
   Contrast,
   MessageCircle,
   RefreshCw
@@ -50,11 +51,13 @@ const ReadingSession: React.FC = () => {
   const [highContrastMode, setHighContrastMode] = useState(false);
   const [autoReadDescriptions, setAutoReadDescriptions] = useState(false);
   const [showDiscussion, setShowDiscussion] = useState(false);
+  const [isReadingDescription, setIsReadingDescription] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [convertingPdf, setConvertingPdf] = useState(false);
   const [conversionMessage, setConversionMessage] = useState<string | null>(null);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<string | undefined>();
+  const descriptionAnnouncementRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (bookId) {
@@ -382,11 +385,21 @@ const ReadingSession: React.FC = () => {
     }
   };
 
+  const stopSpeaking = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      speechSynthesis.cancel();
+    }
+    if (descriptionAnnouncementRef.current && descriptionAnnouncementRef.current.parentElement) {
+      descriptionAnnouncementRef.current.parentElement.removeChild(descriptionAnnouncementRef.current);
+    }
+    descriptionAnnouncementRef.current = null;
+    setIsReadingDescription(false);
+  };
+
   const speakDescription = (description: string) => {
     if ('speechSynthesis' in window) {
-      // Stop any current speech
-      speechSynthesis.cancel();
-      
+      stopSpeaking();
+
       const utterance = new SpeechSynthesisUtterance(description);
       if (selectedVoice) {
         const voice = voices.find(v => v.voiceURI === selectedVoice);
@@ -397,20 +410,31 @@ const ReadingSession: React.FC = () => {
       utterance.rate = 0.8;
       utterance.pitch = 1;
       utterance.volume = 1;
-      
-      // Add ARIA live region announcement
+
       const announcement = document.createElement('div');
       announcement.setAttribute('aria-live', 'polite');
       announcement.setAttribute('aria-atomic', 'true');
       announcement.className = 'sr-only';
       announcement.textContent = `Reading image description: ${description}`;
       document.body.appendChild(announcement);
-      
-      // Remove announcement after speech
+      descriptionAnnouncementRef.current = announcement;
+
       utterance.onend = () => {
-        document.body.removeChild(announcement);
+        if (descriptionAnnouncementRef.current?.parentElement) {
+          descriptionAnnouncementRef.current.parentElement.removeChild(descriptionAnnouncementRef.current);
+        }
+        descriptionAnnouncementRef.current = null;
+        setIsReadingDescription(false);
       };
-      
+      utterance.onerror = () => {
+        if (descriptionAnnouncementRef.current?.parentElement) {
+          descriptionAnnouncementRef.current.parentElement.removeChild(descriptionAnnouncementRef.current);
+        }
+        descriptionAnnouncementRef.current = null;
+        setIsReadingDescription(false);
+      };
+
+      setIsReadingDescription(true);
       speechSynthesis.speak(utterance);
     }
   };
@@ -423,6 +447,47 @@ const ReadingSession: React.FC = () => {
       toast.error('Text-to-speech not available');
     }
   };
+
+  const toggleAutoRead = () => {
+    setAutoReadDescriptions((prev) => {
+      const next = !prev;
+      if (!next) {
+        stopSpeaking();
+      } else if (next && currentPage) {
+        const description = currentPage.image_description || imageDescriptions[currentPage.id || ''];
+        if (description) {
+          speakDescription(description);
+        }
+      }
+      return next;
+    });
+  };
+
+  const handleDescriptionAudio = () => {
+    if (isReadingDescription) {
+      stopSpeaking();
+    } else {
+      speakImageDescription();
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!autoReadDescriptions) {
+      stopSpeaking();
+    }
+  }, [autoReadDescriptions]);
+
+  useEffect(() => {
+    if (!showImageDescription) {
+      stopSpeaking();
+    }
+  }, [showImageDescription]);
 
   // Auto-read descriptions when they become available
   useEffect(() => {
@@ -623,7 +688,7 @@ const ReadingSession: React.FC = () => {
                  </button>
                 
                 <button
-                  onClick={() => setAutoReadDescriptions(!autoReadDescriptions)}
+                  onClick={toggleAutoRead}
                   className={`px-4 py-2 rounded-lg transition-colors ${
                     autoReadDescriptions
                       ? 'bg-green-500 text-white'
@@ -750,11 +815,15 @@ const ReadingSession: React.FC = () => {
                       
                       {(currentPage?.image_description || imageDescriptions[currentPage?.id]) && (
                         <button
-                          onClick={speakImageDescription}
-                          className="p-2 rounded-full bg-green-500 text-white shadow-lg hover:bg-green-600 transition-colors"
-                          title="Listen to image description"
+                          onClick={handleDescriptionAudio}
+                          className={`p-2 rounded-full shadow-lg transition-colors ${
+                            isReadingDescription
+                              ? 'bg-red-500 text-white hover:bg-red-600'
+                              : 'bg-green-500 text-white hover:bg-green-600'
+                          }`}
+                          title={isReadingDescription ? 'Stop image description playback' : 'Listen to image description'}
                         >
-                          <Volume1 className="h-4 w-4" />
+                          {isReadingDescription ? <VolumeX className="h-4 w-4" /> : <Volume1 className="h-4 w-4" />}
                         </button>
                       )}
                     </div>
