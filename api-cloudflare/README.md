@@ -1,6 +1,6 @@
 # Cloudflare Worker API for Tutoring
 
-This folder contains the Cloudflare Worker backend for the tutoring app. It mirrors the main Express API so the frontend can talk to either deployment with the same endpoints/response shapes.
+This folder contains the Cloudflare Worker backend for the tutoring app. It currently covers the core auth, books, dashboard, chat, and achievements routes used by the frontend; some administrative/upload endpoints from the Express API are still pending.
 
 ## Local Development
 
@@ -53,9 +53,17 @@ JWT_SECRET=...
 
 - `POST /api/auth/login`, `POST /api/auth/register`, `GET /api/auth/me`, `POST /api/auth/logout`
 - `GET /api/books`, `GET /api/books/:id`
-- `POST /api/upload/book`, `POST /api/upload/book/:bookId/pages`
+- `POST /api/upload` *(stub — extend to implement storage like the Express API)*
 - `GET /api/dashboard/*` (students, lessons, progress, analytics)
 - `POST /api/chat/lesson`, `POST /api/chat/speaking-practice`
-- `GET /api/achievements`, `GET /api/achievements/user/:id`, etc.
+- `GET /api/achievements`
+
+### Known limitations
+
+- Upload endpoints (`POST /api/upload/book`, `POST /api/upload/book/:bookId/pages`) are not yet ported; `POST /api/upload` currently returns a stub response.
+- Achievements detail routes (`/api/achievements/user/:id`, `/achievements/leaderboard`, etc.) are not implemented.
+- Additional admin/analytics endpoints from Express remain pending.
+
+When adding functionality, update both the Express app and the Worker (or document the divergence) so behaviour stays aligned.
 
 Keep Worker routes in sync with the Express API so the frontend can switch between deployments without behavioural changes.
