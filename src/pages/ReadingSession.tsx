@@ -68,9 +68,9 @@ const ReadingSession: React.FC = () => {
   }, [bookId]);
 
   useEffect(() => {
-    const handleVoicesChanged = () => {
-      setVoices(speechSynthesis.getVoices());
-    };
+  const handleVoicesChanged = () => {
+    setVoices(speechSynthesis.getVoices().filter(voice => voice.lang.startsWith('en')));
+  };
     speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
     handleVoicesChanged(); // Initial load
     return () => speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
