@@ -29,6 +29,7 @@ export interface Book {
   is_public: boolean;
   uploaded_by: string;
   created_at: string;
+  pdf_file_url?: string;
   pages?: BookPage[];
 }
 

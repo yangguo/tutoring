@@ -21,9 +21,10 @@ export interface PageImage {
 /**
  * Convert a PDF file into PNG page images.
  * - Renders each page to an offscreen canvas and exports as PNG blob.
- * - Returns images in page-number order starting from 1.
+ * - Returns images in page-number order starting from startPage.
+ * - Optional startPage and endPage to convert partial pages.
  */
-export async function convertPdfFileToImages(file: File, scale = 2): Promise<PageImage[]> {
+export async function convertPdfFileToImages(file: File, scale = 2, startPage = 1, endPage?: number): Promise<PageImage[]> {
   if (file.type !== 'application/pdf') {
     throw new Error('File is not a PDF');
   }
@@ -32,8 +33,13 @@ export async function convertPdfFileToImages(file: File, scale = 2): Promise<Pag
   const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
   const pdf = await loadingTask.promise;
 
+  const actualEndPage = endPage ? Math.min(endPage, pdf.numPages) : pdf.numPages;
+  if (startPage > actualEndPage) {
+    return [];
+  }
+
   const images: PageImage[] = [];
-  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+  for (let pageNum = startPage; pageNum <= actualEndPage; pageNum++) {
     // eslint-disable-next-line no-await-in-loop
     const page = await pdf.getPage(pageNum);
     const viewport = page.getViewport({ scale });
@@ -81,3 +87,50 @@ export async function convertPdfFileToImages(file: File, scale = 2): Promise<Pag
   return images;
 }
 
+/**
+ * Extract text content from specific PDF pages.
+ * - Uses pdfjs to get text content per page.
+ * - Returns text in page-number order.
+ */
+export interface PageText {
+  pageNumber: number;
+  text: string;
+}
+
+export async function extractPdfTextPerPage(file: File, pageNumbers?: number[]): Promise<PageText[]> {
+  if (file.type !== 'application/pdf') {
+    throw new Error('File is not a PDF');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+  const pdf = await loadingTask.promise;
+
+  const allPageNumbers = pageNumbers || Array.from({ length: pdf.numPages }, (_, i) => i + 1);
+  const texts: PageText[] = [];
+
+  for (const pageNum of allPageNumbers) {
+    if (pageNum > pdf.numPages) continue;
+
+    const page = await pdf.getPage(pageNum);
+    const textContent = await page.getTextContent();
+    const textItems = textContent.items.map(item => (item as any).str).join(' ');
+    texts.push({ pageNumber: pageNum, text: textItems.trim() });
+  }
+
+  return texts;
+}
+
+/**
+ * Get the total number of pages in a PDF file.
+ */
+export async function getPdfPageCount(file: File): Promise<number> {
+  if (file.type !== 'application/pdf') {
+    throw new Error('File is not a PDF');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+  const pdf = await loadingTask.promise;
+  return pdf.numPages;
+}

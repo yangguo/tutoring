@@ -77,9 +77,29 @@ pages.post('/:bookId/pages', async (c) => {
           continue;
         }
 
+        // Parse page number from filename (e.g., page-5.png)
+        let pageNumber = i + 1;
+        const pageMatch = file.name.match(/page-(\d+)\./);
+        if (pageMatch) {
+          pageNumber = parseInt(pageMatch[1], 10);
+        }
+
+        // Check if page already exists
+        const { data: existingPage } = await supabase
+          .from('book_pages')
+          .select('id')
+          .eq('book_id', bookId)
+          .eq('page_number', pageNumber)
+          .single();
+
+        if (existingPage) {
+          failedUploads.push({ filename: file.name, error: `Page ${pageNumber} already exists` });
+          continue;
+        }
+
         // Generate unique filename
         const fileExtension = file.name.split('.').pop();
-        const fileName = `${Date.now()}-${i}-${Math.random().toString(36).substring(2)}.${fileExtension}`;
+        const fileName = `${Date.now()}-${pageNumber}-${Math.random().toString(36).substring(2)}.${fileExtension}`;
         const filePath = `book-pages/${bookId}/${fileName}`;
 
         // Convert file to buffer
@@ -173,7 +193,7 @@ pages.post('/:bookId/pages', async (c) => {
           .from('book_pages')
           .insert({
             book_id: bookId,
-            page_number: i + 1,
+            page_number: pageNumber,
             image_url: urlData.publicUrl,
             image_description: imageDescription
           })

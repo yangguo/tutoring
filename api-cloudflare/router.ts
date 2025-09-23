@@ -13,6 +13,7 @@ import books from './books';
 import pages from './pages';
 import { jwtMiddleware } from './utils/jwt';
 import dashboard from './dashboard';
+import { createSupabaseClient } from './config/supabase';
 
 type RouterBindings = {
   Bindings: {
@@ -34,6 +35,47 @@ app.use('*', cors({
 }));
 
 app.get('/api/health', (c) => c.json({ status: 'ok', cloudflare: true }));
+
+// Enhanced health check with database connectivity test
+app.get('/api/health/detailed', async (c) => {
+  const health = {
+    status: 'ok',
+    cloudflare: true,
+    timestamp: new Date().toISOString(),
+    supabase: {
+      status: 'unknown' as 'unknown' | 'connected' | 'error',
+      error: null as string | null
+    },
+    env: {
+      hasSupabaseUrl: !!c.env.SUPABASE_URL,
+      hasSupabaseKey: !!c.env.SUPABASE_KEY,
+      hasJwtSecret: !!c.env.JWT_SECRET,
+      hasOpenaiKey: !!c.env.OPENAI_API_KEY
+    }
+  };
+
+  try {
+    const supabase = createSupabaseClient(c.env);
+    const { data, error } = await supabase
+      .from('books')
+      .select('count(*)')
+      .limit(1);
+    
+    if (error) {
+      health.supabase.status = 'error';
+      health.supabase.error = error.message;
+    } else {
+      health.supabase.status = 'connected';
+    }
+  } catch (dbError) {
+    health.supabase.status = 'error';
+    health.supabase.error = dbError instanceof Error ? dbError.message : String(dbError);
+  }
+
+  const statusCode = health.supabase.status === 'error' ? 503 : 200;
+  return c.json(health, statusCode);
+});
+
 app.route('/api/auth', auth);
 
 // Protected routes

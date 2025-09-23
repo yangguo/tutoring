@@ -11,5 +11,10 @@ export function createSupabaseClient(env: EnvWithSupabase) {
     throw new Error('Supabase credentials are not configured');
   }
 
-  return createClient(SUPABASE_URL, SUPABASE_KEY);
+  return createClient(SUPABASE_URL, SUPABASE_KEY, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false
+    }
+  });
 }

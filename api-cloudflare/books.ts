@@ -658,38 +658,40 @@ books.post('/analyze-image', jwtMiddleware, async (c) => {
         
         try {
           openaiResponse = await fetch(apiUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: c.env.OPENAI_VISION_MODEL || 'gpt-4-vision-preview',
-            messages: [
-              {
-                role: 'system',
-                content: 'You are an educational assistant for children learning English. Analyze the image and provide a detailed, engaging, age-appropriate description suitable for a children\'s book. Also extract 3-5 key vocabulary words that children can learn from this image. Focus on describing what\'s happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and engaging for young learners. Return a JSON response with "description" (string) and "vocabulary" (array of objects with "word", "definition", and "difficulty_level" fields).'
-              },
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'text',
-                    text: `Please analyze this image from a children's book and provide a detailed, engaging description. Context: ${context || 'General children\'s book illustration'}. Provide an educational description suitable for children aged 3-12, including sensory details and emotional elements that will help children connect with the story. Also identify key vocabulary words they can learn from this scene.`
-                  },
-                  {
-                    type: 'image_url',
-                    image_url: {
-                      url: image_url,
-                      detail: 'high'
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: c.env.OPENAI_VISION_MODEL || 'gpt-4-vision-preview',
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are an educational assistant for children learning English. Analyze the image and provide a detailed, engaging, age-appropriate description suitable for a children\'s book. Focus on describing what\'s happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and engaging for young learners.'
+                },
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Please analyze this image from a children's book and provide a detailed, engaging description. ${
+                        context ? `Context: ${context}` : 'This is from a children\'s book illustration.'
+                      } Focus on describing what is happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and age-appropriate for children aged 3-12. Include sensory details and emotional elements that will help children connect with the story.`
+                    },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: image_url,
+                        detail: 'high'
+                      }
                     }
-                  }
-                ]
-              }
-            ],
-            max_tokens: 1200,
-            temperature: 0.3
-          }),
+                  ]
+                }
+              ],
+              max_tokens: 1200,
+              temperature: 0.3
+            }),
           signal: controller.signal
         });
         if (timeoutId) clearTimeout(timeoutId);
@@ -1320,6 +1322,20 @@ books.post('/:bookId/regenerate-all-descriptions', jwtMiddleware, async (c) => {
 books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async (c) => {
   let timeoutId: number | null = null;
   
+  // Helper function to add timeout to database operations
+  const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Database operation timed out'));
+      }, timeoutMs);
+      
+      promise
+        .then(resolve)
+        .catch(reject)
+        .finally(() => clearTimeout(timeout));
+    });
+  };
+
   try {
     const { bookId, pageId } = c.req.param();
     
@@ -1333,21 +1349,46 @@ books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async
     // 1. Get the page information with error handling
     let page, pageError;
     try {
-      const result = await supabase
-        .from('book_pages')
-        .select('image_url, page_number')
-        .eq('id', pageId)
-        .eq('book_id', bookId)
-        .single();
+      const result = await withTimeout(
+        (async () => {
+          return await supabase
+            .from('book_pages')
+            .select('image_url, page_number')
+            .eq('id', pageId)
+            .eq('book_id', bookId)
+            .single();
+        })(),
+        30000 // 30 second timeout for database operations
+      );
       page = result.data;
       pageError = result.error;
     } catch (dbError) {
-      console.error('Database error fetching page:', dbError);
-      return c.json({ error: 'Database connection error' }, 500);
+      console.error('Database error fetching page:', {
+        error: dbError,
+        message: dbError instanceof Error ? dbError.message : String(dbError),
+        stack: dbError instanceof Error ? dbError.stack : undefined,
+        bookId,
+        pageId
+      });
+      
+      // Provide more specific error information
+      const errorMessage = dbError instanceof Error ? dbError.message : String(dbError);
+      if (errorMessage.includes('network') || errorMessage.includes('connection') || errorMessage.includes('fetch')) {
+        return c.json({ error: 'Network connection lost', details: errorMessage }, 503);
+      } else if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+        return c.json({ error: 'Database operation timed out', details: errorMessage }, 408);
+      }
+      
+      return c.json({ error: 'Database connection error', details: errorMessage }, 500);
     }
 
     if (pageError || !page) {
-      console.error('Failed to fetch page:', pageError);
+      console.error('Failed to fetch page:', {
+        pageError,
+        bookId,
+        pageId,
+        hasPage: !!page
+      });
       return c.json({ error: 'Page not found' }, 404);
     }
 
@@ -1358,14 +1399,23 @@ books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async
     // 2. Get book context for better description with error handling
     let book = null;
     try {
-      const result = await supabase
-        .from('books')
-        .select('title, description, target_age_min, target_age_max')
-        .eq('id', bookId)
-        .single();
+      const result = await withTimeout(
+        (async () => {
+          return await supabase
+            .from('books')
+            .select('title, description, target_age_min, target_age_max')
+            .eq('id', bookId)
+            .single();
+        })(),
+        15000 // 15 second timeout for book context (less critical)
+      );
       book = result.data;
     } catch (dbError) {
-      console.warn('Failed to fetch book context:', dbError);
+      console.warn('Failed to fetch book context:', {
+        error: dbError,
+        message: dbError instanceof Error ? dbError.message : String(dbError),
+        bookId
+      });
       // Continue without book context
     }
 
@@ -1402,10 +1452,10 @@ books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async
           body: JSON.stringify({
             model: c.env.OPENAI_VISION_MODEL || 'gpt-4-vision-preview',
             messages: [
-              {
-                role: 'system',
-                content: 'You are an educational assistant for children learning English. Analyze the image and provide a detailed, engaging, age-appropriate description suitable for a children\'s book. Focus on describing what\'s happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and engaging for young learners.'
-              },
+                {
+                  role: 'system',
+                  content: 'You are an educational assistant for children learning English. Analyze the image and provide a detailed, engaging, age-appropriate description suitable for a children\'s book. Focus on describing what\'s happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and engaging for young learners.'
+                },
               {
                 role: 'user',
                 content: [
@@ -1473,19 +1523,35 @@ books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async
 
     // 4. Update the page with the new description with comprehensive error handling
     try {
-      const { data: updatedPage, error: updateError } = await supabase
-        .from('book_pages')
-        .update({ image_description: newDescription })
-        .eq('id', pageId)
-        .select();
+      const result = await withTimeout(
+        (async () => {
+          return await supabase
+            .from('book_pages')
+            .update({ image_description: newDescription })
+            .eq('id', pageId)
+            .select();
+        })(),
+        30000 // 30 second timeout for database operations
+      );
+      
+      const { data: updatedPage, error: updateError } = result;
 
       if (updateError) {
-        console.error('Failed to update page with new description:', updateError);
-        return c.json({ error: 'Failed to save new description' }, 500);
+        console.error('Failed to update page with new description:', {
+          updateError,
+          bookId,
+          pageId,
+          descriptionLength: newDescription ? newDescription.length : 0
+        });
+        return c.json({ error: 'Failed to save new description', details: updateError.message }, 500);
       }
 
       if (!updatedPage || updatedPage.length === 0) {
-        console.error('No page was updated - page ID may not exist:', pageId);
+        console.error('No page was updated - page ID may not exist:', {
+          pageId,
+          bookId,
+          updatedPageCount: updatedPage ? updatedPage.length : 0
+        });
         return c.json({ error: 'Page not found or could not be updated' }, 404);
       }
 
@@ -1494,8 +1560,22 @@ books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async
         description: newDescription
       });
     } catch (dbUpdateError) {
-      console.error('Database update error:', dbUpdateError);
-      return c.json({ error: 'Database update failed' }, 500);
+      console.error('Database update error:', {
+        error: dbUpdateError,
+        message: dbUpdateError instanceof Error ? dbUpdateError.message : String(dbUpdateError),
+        stack: dbUpdateError instanceof Error ? dbUpdateError.stack : undefined,
+        bookId,
+        pageId
+      });
+      
+      const errorMessage = dbUpdateError instanceof Error ? dbUpdateError.message : String(dbUpdateError);
+      if (errorMessage.includes('network') || errorMessage.includes('connection') || errorMessage.includes('fetch')) {
+        return c.json({ error: 'Network connection lost during update', details: errorMessage }, 503);
+      } else if (errorMessage.includes('timeout') || errorMessage.includes('timed out')) {
+        return c.json({ error: 'Database update timed out', details: errorMessage }, 408);
+      }
+      
+      return c.json({ error: 'Database update failed', details: errorMessage }, 500);
     }
 
   } catch (error) {
@@ -1517,6 +1597,134 @@ books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async
       }
     }
     
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+// Compare AI analysis with PDF text
+books.post('/:bookId/compare-analysis', jwtMiddleware, async (c) => {
+  try {
+    const { bookId } = c.req.param();
+    const user = c.get('user');
+    
+    if (!bookId) {
+      return c.json({ error: 'Book ID is required' }, 400);
+    }
+
+    const supabase = createSupabaseClient(c.env);
+
+    // Verify book exists and user has permission
+    const { data: book, error: bookError } = await supabase
+      .from('books')
+      .select('id, uploaded_by')
+      .eq('id', bookId)
+      .single();
+
+    if (bookError || !book) {
+      return c.json({ error: 'Book not found' }, 404);
+    }
+
+    if (user.role !== 'admin' && book.uploaded_by !== user.userId) {
+      return c.json({ error: 'Permission denied' }, 403);
+    }
+
+    // Get all pages with text_content and image_description
+    const { data: pages, error: pagesError } = await supabase
+      .from('book_pages')
+      .select('id, page_number, text_content, image_description')
+      .eq('book_id', bookId)
+      .order('page_number');
+
+    if (pagesError) {
+      console.error('Failed to fetch book pages:', pagesError);
+      return c.json({ error: 'Failed to fetch book pages' }, 500);
+    }
+
+    if (!pages || pages.length === 0) {
+      return c.json({ error: 'No pages found for this book' }, 404);
+    }
+
+    const comparisons = [];
+    let successfulComparisons = 0;
+    let failedComparisons = 0;
+
+    for (const page of pages) {
+      if (!page.text_content || !page.image_description) {
+        comparisons.push({
+          page_number: page.page_number,
+          report: 'Missing text or description for comparison'
+        });
+        failedComparisons++;
+        continue;
+      }
+
+      try {
+        // Use OpenAI for comparison
+        const baseUrl = c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+        const apiUrl = baseUrl.endsWith('/') ? `${baseUrl}chat/completions` : `${baseUrl}/chat/completions`;
+
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: c.env.OPENAI_MODEL || 'gpt-4',
+            messages: [
+              {
+                role: 'system',
+                content: 'You are an educational assistant. Compare the PDF text with the AI-generated image description for accuracy, completeness, and educational value. Provide a brief report on consistency, any discrepancies, missing details, or suggestions for improvement. Keep it concise.'
+              },
+              {
+                role: 'user',
+                content: `PDF text: "${page.text_content}"\n\nAI image description: "${page.image_description}"\n\nComparison report:`
+              }
+            ],
+            max_tokens: 200,
+            temperature: 0.3
+          }),
+          signal: AbortSignal.timeout(30000)
+        });
+
+        if (response.ok) {
+          const result = await response.json() as OpenAIResponse;
+          const report = result.choices[0]?.message?.content || 'No report generated';
+          comparisons.push({
+            page_number: page.page_number,
+            report
+          });
+          successfulComparisons++;
+        } else {
+          comparisons.push({
+            page_number: page.page_number,
+            report: 'Comparison API failed'
+          });
+          failedComparisons++;
+        }
+
+        // Delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        comparisons.push({
+          page_number: page.page_number,
+          report: 'Comparison error: ' + (error instanceof Error ? error.message : 'Unknown error')
+        });
+        failedComparisons++;
+      }
+    }
+
+    return c.json({
+      message: `Comparison completed for ${pages.length} pages`,
+      results: {
+        total_pages: pages.length,
+        successful_comparisons: successfulComparisons,
+        failed_comparisons: failedComparisons,
+        comparisons
+      }
+    });
+  } catch (error) {
+    console.error('Compare analysis error:', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });

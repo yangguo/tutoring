@@ -215,99 +215,275 @@ upload.get('/books', async (c) => {
   }
 });
 
-// Delete book
-upload.delete('/book/:bookId', async (c) => {
-  try {
-    const supabase = createSupabaseClient(c.env);
-    const user = c.get('user');
-    
-    if (!user) {
-      return c.json({ error: 'Authentication required' }, 401);
-    }
-    
-    const { userId, role } = user;
-    const { bookId } = c.req.param();
+  // Delete book
+  upload.delete('/book/:bookId', async (c) => {
+    try {
+      const supabase = createSupabaseClient(c.env);
+      const user = c.get('user');
+      
+      if (!user) {
+        return c.json({ error: 'Authentication required' }, 401);
+      }
+      
+      const { userId, role } = user;
+      const { bookId } = c.req.param();
 
-    // Check if user has permission to delete books
-    if (!['parent', 'admin'].includes(role)) {
-      return c.json({ error: 'Permission denied' }, 403);
-    }
+      // Check if user has permission to delete books
+      if (!['parent', 'admin'].includes(role)) {
+        return c.json({ error: 'Permission denied' }, 403);
+      }
 
-    // Verify book exists and user has permission
-    const { data: bookData, error: bookError } = await supabase
-      .from('books')
-      .select('id, uploaded_by, file_path')
-      .eq('id', bookId)
-      .single();
+      // Verify book exists and user has permission
+      const { data: bookData, error: bookError } = await supabase
+        .from('books')
+        .select('id, uploaded_by, file_path')
+        .eq('id', bookId)
+        .single();
 
-    if (bookError || !bookData) {
-      return c.json({ error: 'Book not found' }, 404);
-    }
+      if (bookError || !bookData) {
+        return c.json({ error: 'Book not found' }, 404);
+      }
 
-    if (role !== 'admin' && bookData.uploaded_by !== userId) {
-      return c.json({ error: 'Permission denied' }, 403);
-    }
+      if (role !== 'admin' && bookData.uploaded_by !== userId) {
+        return c.json({ error: 'Permission denied' }, 403);
+      }
 
-    // Remove book from associated lesson plans
-    const { data: plans, error: planFindError } = await supabase
-      .from('lesson_plans')
-      .select('id, book_ids')
-      .contains('book_ids', [bookId]);
+      // Remove book from associated lesson plans
+      const { data: plans, error: planFindError } = await supabase
+        .from('lesson_plans')
+        .select('id, book_ids')
+        .contains('book_ids', [bookId]);
 
-    if (planFindError) {
-      console.error('Failed to find lesson plans:', planFindError.message);
-    } else if (plans && plans.length > 0) {
-      for (const plan of plans) {
-        const newBookIds = plan.book_ids.filter((bid: string) => bid !== bookId);
-        const { error: planUpdateError } = await supabase
-          .from('lesson_plans')
-          .update({ book_ids: newBookIds })
-          .eq('id', plan.id);
-        if (planUpdateError) {
-          console.error('Failed to update lesson plan:', planUpdateError.message);
+      if (planFindError) {
+        console.error('Failed to find lesson plans:', planFindError.message);
+      } else if (plans && plans.length > 0) {
+        for (const plan of plans) {
+          const newBookIds = plan.book_ids.filter((bid: string) => bid !== bookId);
+          const { error: planUpdateError } = await supabase
+            .from('lesson_plans')
+            .update({ book_ids: newBookIds })
+            .eq('id', plan.id);
+          if (planUpdateError) {
+            console.error('Failed to update lesson plan:', planUpdateError.message);
+          }
         }
       }
-    }
 
-    // Get all book pages to delete their files
-    const { data: pages } = await supabase
-      .from('book_pages')
-      .select('image_path')
-      .eq('book_id', bookId);
+      // Get all book pages to delete their files
+      const { data: pages } = await supabase
+        .from('book_pages')
+        .select('image_path')
+        .eq('book_id', bookId);
 
-    // Delete book pages from database
-    await supabase
-      .from('book_pages')
-      .delete()
-      .eq('book_id', bookId);
+      // Delete book pages from database
+      await supabase
+        .from('book_pages')
+        .delete()
+        .eq('book_id', bookId);
 
-    // Delete book from database
-    const { error: deleteError } = await supabase
-      .from('books')
-      .delete()
-      .eq('id', bookId);
+      // Delete book from database
+      const { error: deleteError } = await supabase
+        .from('books')
+        .delete()
+        .eq('id', bookId);
 
-    if (deleteError) {
-      return c.json({ error: 'Failed to delete book' }, 500);
-    }
-
-    // Delete files from storage (non-blocking)
-    try {
-      const filesToDelete = [bookData.file_path];
-      if (pages) {
-        filesToDelete.push(...pages.map(p => p.image_path).filter(Boolean));
+      if (deleteError) {
+        return c.json({ error: 'Failed to delete book' }, 500);
       }
-      await supabase.storage.from('book-files').remove(filesToDelete);
-    } catch (storageError) {
-      console.warn('Failed to delete some files from storage:', storageError);
-      // Don't fail the request if storage cleanup fails
-    }
 
-    return c.json({ message: 'Book deleted successfully' });
-  } catch (error) {
-    console.error('Delete book error:', error);
-    return handleError(c, error);
-  }
-});
+      // Delete files from storage (non-blocking)
+      try {
+        const filesToDelete = [bookData.file_path];
+        if (pages) {
+          filesToDelete.push(...pages.map(p => p.image_path).filter(Boolean));
+        }
+        await supabase.storage.from('book-files').remove(filesToDelete);
+      } catch (storageError) {
+        console.warn('Failed to delete some files from storage:', storageError);
+        // Don't fail the request if storage cleanup fails
+      }
+
+      return c.json({ message: 'Book deleted successfully' });
+    } catch (error) {
+      console.error('Delete book error:', error);
+      return handleError(c, error);
+    }
+  });
+
+  // Update page text_content
+  upload.patch('/book/:bookId/pages/:pageId', async (c) => {
+    try {
+      const { bookId, pageId } = c.req.param();
+      const user = c.get('user');
+      
+      if (!user) {
+        return c.json({ error: 'Authentication required' }, 401);
+      }
+      
+      const { userId, role } = user;
+
+      if (!['parent', 'admin'].includes(role)) {
+        return c.json({ error: 'Permission denied' }, 403);
+      }
+
+      const supabase = createSupabaseClient(c.env);
+
+      // Verify book and page
+      const { data: bookData } = await supabase
+        .from('books')
+        .select('id, uploaded_by')
+        .eq('id', bookId)
+        .single();
+
+      if (!bookData || (role !== 'admin' && bookData.uploaded_by !== userId)) {
+        return c.json({ error: 'Permission denied' }, 403);
+      }
+
+      const { data: pageData } = await supabase
+        .from('book_pages')
+        .select('id')
+        .eq('id', pageId)
+        .eq('book_id', bookId)
+        .single();
+
+      if (!pageData) {
+        return c.json({ error: 'Page not found' }, 404);
+      }
+
+      const { text_content } = await c.req.json();
+
+      const { error } = await supabase
+        .from('book_pages')
+        .update({ text_content })
+        .eq('id', pageId);
+
+      if (error) {
+        return c.json({ error: 'Failed to update page' }, 500);
+      }
+
+      return c.json({ message: 'Page updated successfully' });
+    } catch (error) {
+      console.error('Update page error:', error);
+      return c.json({ error: 'Internal server error' }, 500);
+    }
+  });
+
+  // Upload book pages (images)
+  upload.post('/book/:bookId/pages', async (c) => {
+    try {
+      const { bookId } = c.req.param();
+      const user = c.get('user');
+      
+      if (!user) {
+        return c.json({ error: 'Authentication required' }, 401);
+      }
+      
+      const { userId, role } = user;
+      if (!['parent', 'admin'].includes(role)) {
+        return c.json({ error: 'Permission denied' }, 403);
+      }
+
+      const supabase = createSupabaseClient(c.env);
+
+      // Verify book access
+      const { data: bookData, error: bookError } = await supabase
+        .from('books')
+        .select('id, uploaded_by')
+        .eq('id', bookId)
+        .single();
+
+      if (bookError || !bookData) {
+        return c.json({ error: 'Book not found' }, 404);
+      }
+
+      if (role !== 'admin' && bookData.uploaded_by !== userId) {
+        return c.json({ error: 'Permission denied' }, 403);
+      }
+
+      const formData = await c.req.formData();
+      const pageFiles = formData.getAll('pages') as File[];
+
+      if (pageFiles.length === 0) {
+        return c.json({ error: 'No page files provided' }, 400);
+      }
+
+      const uploadedPages: any[] = [];
+
+      for (const file of pageFiles) {
+        const pageNumMatch = file.name.match(/page-(\d+)\./);
+        if (!pageNumMatch) {
+          console.warn('Invalid page filename:', file.name);
+          continue;
+        }
+
+        const pageNumber = parseInt(pageNumMatch[1]);
+        if (isNaN(pageNumber) || pageNumber < 1) {
+          console.warn('Invalid page number:', file.name);
+          continue;
+        }
+
+        // Check if page already exists
+        const { data: existingPage } = await supabase
+          .from('book_pages')
+          .select('id')
+          .eq('book_id', bookId)
+          .eq('page_number', pageNumber)
+          .maybeSingle();
+
+        if (existingPage) {
+          console.warn('Page already exists, skipping:', pageNumber);
+          continue;
+        }
+
+        const buffer = await file.arrayBuffer();
+        const filePath = `books/${userId}/${bookId}/pages/page-${pageNumber}.png`;
+
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('book-files')
+          .upload(filePath, buffer, {
+            contentType: 'image/png',
+            upsert: false
+          });
+
+        if (uploadError) {
+          console.error('Storage upload error for page', pageNumber, uploadError);
+          continue;
+        }
+
+        const { data: urlData } = supabase.storage
+          .from('book-files')
+          .getPublicUrl(filePath);
+
+        const { data: pageData, error: pageError } = await supabase
+          .from('book_pages')
+          .insert({
+            book_id: bookId,
+            page_number: pageNumber,
+            image_url: urlData.publicUrl,
+            image_path: filePath,
+            text_content: ''
+          })
+          .select()
+          .single();
+
+        if (pageError) {
+          console.error('Failed to create page record', pageNumber, pageError);
+          // Optionally remove uploaded file
+          await supabase.storage.from('book-files').remove([filePath]);
+          continue;
+        }
+
+        uploadedPages.push(pageData);
+      }
+
+      return c.json({
+        message: `Successfully uploaded ${uploadedPages.length} new pages`,
+        uploaded_pages: uploadedPages
+      });
+    } catch (error) {
+      console.error('Upload pages error:', error);
+      return c.json({ error: 'Internal server error' }, 500);
+    }
+  });
 
 export default upload;

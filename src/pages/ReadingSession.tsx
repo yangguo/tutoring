@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { api, Book, BookPage, DiscussionMessage, API_BASE_URL } from '../lib/api';
 import ChatInterface from '../components/ChatInterface';
-import { convertPdfFileToImages } from '../lib/pdf';
+import { convertPdfFileToImages, getPdfPageCount, extractPdfTextPerPage } from '../lib/pdf';
 
 
 
@@ -56,6 +56,7 @@ const ReadingSession: React.FC = () => {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [convertingPdf, setConvertingPdf] = useState(false);
   const [conversionMessage, setConversionMessage] = useState<string | null>(null);
+  const [totalPages, setTotalPages] = useState<number>(0);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<string | undefined>();
   const descriptionAnnouncementRef = useRef<HTMLDivElement | null>(null);
@@ -82,6 +83,29 @@ const ReadingSession: React.FC = () => {
       loadDiscussionHistory();
     }
   }, [book?.id]);
+
+  // Compute total pages from PDF to enable resume functionality
+  useEffect(() => {
+    const computeTotalPages = async () => {
+      if (!book?.pdf_file_url) return;
+
+      try {
+        const response = await fetch(book.pdf_file_url, { credentials: 'omit' });
+        if (!response.ok) {
+          console.warn('Failed to download PDF for page count');
+          return;
+        }
+        const pdfBlob = await response.blob();
+        const pdfFile = new File([pdfBlob], 'temp.pdf', { type: 'application/pdf' });
+        const total = await getPdfPageCount(pdfFile);
+        setTotalPages(total);
+      } catch (err) {
+        console.error('Failed to compute total pages:', err);
+      }
+    };
+
+    computeTotalPages();
+  }, [book?.pdf_file_url]);
 
   const loadDiscussionHistory = async () => {
     if (!book?.id) return;
@@ -633,6 +657,82 @@ const ReadingSession: React.FC = () => {
     }
   };
 
+  const handleConvertRemaining = async () => {
+    if (!book?.id || !(book as any).pdf_file_url || convertingPdf) return;
+
+    setConvertingPdf(true);
+    setConversionMessage('Downloading PDF...');
+    try {
+      const response = await fetch((book as any).pdf_file_url, { credentials: 'omit' });
+      if (!response.ok) throw new Error('Failed to download PDF');
+      const pdfBlob = await response.blob();
+      const pdfFile = new File([pdfBlob], `${book.title || 'book'}.pdf`, { type: 'application/pdf' });
+
+      const currentMaxPage = pages.length > 0 ? Math.max(...pages.map(p => p.page_number)) : 0;
+      const startPage = currentMaxPage + 1;
+      const total = totalPages || await getPdfPageCount(pdfFile);
+      if (startPage > total) {
+        toast.info('All pages are already converted.');
+        return;
+      }
+      const endPage = total;
+
+      setConversionMessage(`Converting remaining pages ${startPage}-${endPage}...`);
+      const images = await convertPdfFileToImages(pdfFile, 2, startPage, endPage);
+      const pageNumbers = images.map(img => img.pageNumber);
+      const texts = await extractPdfTextPerPage(pdfFile, pageNumbers);
+
+      setConversionMessage(`Uploading ${images.length} remaining page images...`);
+
+      const token = localStorage.getItem('auth_token');
+      if (!token) throw new Error('Authentication required');
+
+      const pagesForm = new FormData();
+      images.forEach(({ blob, pageNumber }) => {
+        const name = `page-${pageNumber}.png`;
+        pagesForm.append('pages', new File([blob], name, { type: 'image/png' }), name);
+      });
+
+      const uploadResp = await fetch(buildApiUrl(`/api/upload/book/${book.id}/pages`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: pagesForm,
+      });
+      const uploadResult = await uploadResp.json().catch(() => ({}));
+      if (!uploadResp.ok) {
+        throw new Error(uploadResult.error || 'Failed to upload page images');
+      }
+
+      // Update new pages with text_content
+      const newPages = uploadResult.uploaded_pages || [];
+      for (const newPage of newPages) {
+        const text = texts.find(t => t.pageNumber === newPage.page_number)?.text || '';
+        await fetch(buildApiUrl(`/api/upload/book/${book.id}/pages/${newPage.id}`), {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ text_content: text })
+        }).catch(err => console.error('Failed to update text for page', newPage.id, err));
+      }
+
+      setConversionMessage(null);
+      toast.success(`Converted and uploaded ${images.length} remaining pages with analysis.`);
+      // Reload book data
+      setLoading(true);
+      await fetchBookData();
+      setTotalPages(0);
+    } catch (err) {
+      console.error('Remaining PDF conversion failed:', err);
+      setConversionMessage(null);
+      toast.error(err instanceof Error ? err.message : 'PDF conversion failed');
+    } finally {
+      setConvertingPdf(false);
+      setLoading(false);
+    }
+  };
+
   if (pages.length === 0 && inlinePdfUrl) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
@@ -727,7 +827,7 @@ const ReadingSession: React.FC = () => {
           </div>
 
           {/* Control Panels Row */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
             
             {/* Reading Controls */}
             <div className="bg-gray-50 rounded-lg p-3">
@@ -846,6 +946,27 @@ const ReadingSession: React.FC = () => {
                 </button>
               </div>
             </div>
+
+            {/* Conversion Status */}
+            {totalPages > 0 && (
+              <div className="bg-gray-50 rounded-lg p-3">
+                <h3 className="text-sm font-medium text-gray-700 mb-2">Conversion</h3>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-gray-600">{pages.length}/{totalPages} pages</span>
+                  {pages.length < totalPages && !convertingPdf && (
+                    <button
+                      onClick={handleConvertRemaining}
+                      className="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 transition-colors"
+                    >
+                      Convert Remaining
+                    </button>
+                  )}
+                  {convertingPdf && (
+                    <span className="text-sm text-blue-600">{conversionMessage}</span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Keyboard Shortcuts Help */}
