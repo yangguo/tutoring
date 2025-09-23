@@ -668,14 +668,14 @@ books.post('/analyze-image', jwtMiddleware, async (c) => {
             messages: [
               {
                 role: 'system',
-                content: 'You are an educational assistant for children learning English. Analyze the image and provide an age-appropriate, educational description. Also extract 3-5 key vocabulary words that children can learn from this image. Return a JSON response with "description" (string) and "vocabulary" (array of objects with "word", "definition", and "difficulty_level" fields).'
+                content: 'You are an educational assistant for children learning English. Analyze the image and provide a detailed, engaging, age-appropriate description suitable for a children\'s book. Also extract 3-5 key vocabulary words that children can learn from this image. Focus on describing what\'s happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and engaging for young learners. Return a JSON response with "description" (string) and "vocabulary" (array of objects with "word", "definition", and "difficulty_level" fields).'
               },
               {
                 role: 'user',
                 content: [
                   {
                     type: 'text',
-                    text: `Please analyze this image from a children's book. Context: ${context || 'General children\'s book illustration'}. Provide an educational description suitable for children aged 3-12, and identify key vocabulary words they can learn.`
+                    text: `Please analyze this image from a children's book and provide a detailed, engaging description. Context: ${context || 'General children\'s book illustration'}. Provide an educational description suitable for children aged 3-12, including sensory details and emotional elements that will help children connect with the story. Also identify key vocabulary words they can learn from this scene.`
                   },
                   {
                     type: 'image_url',
@@ -687,7 +687,7 @@ books.post('/analyze-image', jwtMiddleware, async (c) => {
                 ]
               }
             ],
-            max_tokens: 800,
+            max_tokens: 1200,
             temperature: 0.3
           }),
           signal: controller.signal
@@ -1197,22 +1197,28 @@ books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async
             model: c.env.OPENAI_VISION_MODEL || 'gpt-4-vision-preview',
             messages: [
               {
+                role: 'system',
+                content: 'You are an educational assistant for children learning English. Analyze the image and provide a detailed, engaging, age-appropriate description suitable for a children\'s book. Focus on describing what\'s happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and engaging for young learners.'
+              },
+              {
                 role: 'user',
                 content: [
                   {
                     type: 'text',
-                    text: `Please analyze this image and provide a detailed, engaging description suitable for a children's book. ${context ? `Context: ${context}` : ''} Focus on describing what's happening in the scene, the characters, their emotions, and the setting. Make it vivid and age-appropriate.`
+                    text: `Please analyze this image from a children's book and provide a detailed, engaging description. ${context ? `Context: ${context}` : 'This is from a children\'s book illustration.'} Focus on describing what's happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and age-appropriate for children aged 3-12. Include sensory details and emotional elements that will help children connect with the story.`
                   },
                   {
                     type: 'image_url',
                     image_url: {
-                      url: page.image_url
+                      url: page.image_url,
+                      detail: 'high'
                     }
                   }
                 ]
               }
             ],
-            max_tokens: 1500
+            max_tokens: 1200,
+            temperature: 0.3
           }),
           signal: controller.signal
         });
@@ -1242,7 +1248,7 @@ books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async
       if (timeoutId) clearTimeout(timeoutId);
       
       if (error instanceof Error && error.name === 'AbortError') {
-        console.log('AI image analysis timed out after 30 seconds');
+        console.log('AI image analysis timed out after 120 seconds');
       } else {
         console.log('AI image analysis failed:', error instanceof Error ? error.message : String(error));
       }
