@@ -696,7 +696,8 @@ const ReadingSession: React.FC = () => {
             : 'bg-white'
         }`}>
         <div className="max-w-6xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
+          {/* Top Row - Navigation and Title */}
+          <div className="flex items-center justify-between mb-4">
             <div className="flex items-center space-x-4">
               <button
                 onClick={() => navigate('/library')}
@@ -710,74 +711,78 @@ const ReadingSession: React.FC = () => {
                 <p className="text-sm text-gray-600">by {book.author}</p>
               </div>
             </div>
+            
+            {/* Page Progress */}
             <div className="flex items-center space-x-4">
               <span className="text-sm text-gray-600">
                 Page {currentPageIndex + 1} of {pages.length}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="w-32 bg-gray-200 rounded-full h-2">
+                <div 
+                  className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${((currentPageIndex + 1) / pages.length) * 100}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Control Panels Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            
+            {/* Reading Controls */}
+            <div className="bg-gray-50 rounded-lg p-3">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Reading Controls</h3>
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   onClick={() => setShowImageDescription(!showImageDescription)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
+                  className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                     showImageDescription
                       ? 'bg-blue-500 text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      : 'bg-white text-gray-700 hover:bg-gray-100 border'
                   }`}
                   aria-label={showImageDescription ? 'Hide image descriptions' : 'Show image descriptions'}
                 >
-                  <Eye className="h-4 w-4 inline mr-2" />
+                  <Eye className="h-4 w-4 inline mr-1" />
                   Descriptions
                 </button>
                 
                 <button
-                  onClick={regenerateAllDescriptions}
-                  disabled={regeneratingAll}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
-                    regeneratingAll
-                      ? 'bg-orange-500 text-white'
-                      : 'bg-orange-600 text-white hover:bg-orange-700'
-                  }`}
-                  aria-label="Regenerate all image descriptions"
-                  title="Regenerate AI descriptions for all images in this book"
-                >
-                  {regeneratingAll ? (
-                    <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full inline mr-2" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4 inline mr-2" />
-                  )}
-                  Regenerate All
-                </button>
-                
-                <button
                    onClick={() => setHighContrastMode(!highContrastMode)}
-                   className={`px-4 py-2 rounded-lg transition-colors ${
+                   className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                      highContrastMode
                        ? 'bg-gray-800 text-white'
-                       : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                       : 'bg-white text-gray-700 hover:bg-gray-100 border'
                    }`}
                    aria-label={highContrastMode ? 'Disable high contrast mode' : 'Enable high contrast mode'}
                    title="Ctrl+H"
                  >
-                   <Contrast className="h-4 w-4 inline mr-2" />
+                   <Contrast className="h-4 w-4 inline mr-1" />
                    {highContrastMode ? 'Normal' : 'High Contrast'}
                  </button>
-                
+              </div>
+            </div>
+
+            {/* Audio & AI Controls */}
+            <div className="bg-gray-50 rounded-lg p-3">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Audio & AI</h3>
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   onClick={toggleAutoRead}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
+                  className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                     autoReadDescriptions
                       ? 'bg-green-500 text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      : 'bg-white text-gray-700 hover:bg-gray-100 border'
                   }`}
                   aria-label={autoReadDescriptions ? 'Disable auto-read descriptions' : 'Enable auto-read descriptions'}
                 >
-                  <Volume2 className="h-4 w-4 inline mr-2" />
+                  <Volume2 className="h-4 w-4 inline mr-1" />
                   Auto-Read
                 </button>
 
                 <select
                   value={selectedVoice}
                   onChange={(e) => setSelectedVoice(e.target.value)}
-                  className="bg-gray-200 text-gray-700 rounded-lg px-4 py-2"
+                  className="bg-white text-gray-700 rounded-lg px-3 py-2 text-sm border hover:bg-gray-50"
                 >
                   {voices.map(voice => (
                     <option key={voice.voiceURI} value={voice.voiceURI}>
@@ -787,40 +792,70 @@ const ReadingSession: React.FC = () => {
                 </select>
                 
                 <button
+                  onClick={regenerateAllDescriptions}
+                  disabled={regeneratingAll}
+                  className={`px-3 py-2 rounded-lg transition-colors text-sm ${
+                    regeneratingAll
+                      ? 'bg-orange-500 text-white'
+                      : 'bg-orange-600 text-white hover:bg-orange-700'
+                  }`}
+                  aria-label="Regenerate all image descriptions"
+                  title="Regenerate AI descriptions for all images in this book"
+                >
+                  {regeneratingAll ? (
+                    <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full inline mr-1" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 inline mr-1" />
+                  )}
+                  Regenerate
+                </button>
+              </div>
+            </div>
+
+            {/* Session Controls */}
+            <div className="bg-gray-50 rounded-lg p-3">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Session</h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
                   onClick={() => setShowDiscussion(!showDiscussion)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
+                  className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                     showDiscussion
                       ? 'bg-purple-500 text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      : 'bg-white text-gray-700 hover:bg-gray-100 border'
                   }`}
                   aria-label={showDiscussion ? 'Hide discussion panel' : 'Show discussion panel'}
                 >
-                  <MessageCircle className="h-4 w-4 inline mr-2" />
+                  <MessageCircle className="h-4 w-4 inline mr-1" />
                   Discuss
                 </button>
+                
+                <button
+                  onClick={() => setShowVocabulary(!showVocabulary)}
+                  className="bg-purple-500 text-white px-3 py-2 rounded-lg hover:bg-purple-600 transition-colors text-sm"
+                >
+                  <BookOpen className="h-4 w-4 inline mr-1" />
+                  Vocabulary
+                </button>
+                
+                <button
+                  onClick={handleFinishSession}
+                  className="bg-green-500 text-white px-3 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
+                >
+                  <Star className="h-4 w-4 inline mr-1" />
+                  Finish
+                </button>
               </div>
-               
-               {/* Keyboard Navigation Help */}
-               <div className="text-sm text-gray-600 hidden md:block" aria-label="Keyboard shortcuts">
-                 <span className="mr-4">⬅️➡️ Navigate</span>
-                 <span className="mr-4">Space: Play/Pause</span>
-                 <span className="mr-4">Ctrl+Enter: Analyze</span>
-                 <span className="mr-4">Ctrl+D: Descriptions</span>
-                 <span>Ctrl+H: High Contrast</span>
-               </div>
-               
-               <button
-                 onClick={() => setShowVocabulary(!showVocabulary)}
-                className="bg-purple-500 text-white px-4 py-2 rounded-lg hover:bg-purple-600 transition-colors"
-              >
-                Vocabulary
-              </button>
-              <button
-                onClick={handleFinishSession}
-                className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors"
-              >
-                Finish Session
-              </button>
+            </div>
+          </div>
+
+          {/* Keyboard Shortcuts Help */}
+          <div className="mt-3 pt-3 border-t border-gray-200">
+            <div className="flex flex-wrap gap-4 text-xs text-gray-500">
+              <span>⬅️➡️ Navigate</span>
+              <span>Space: Play/Pause</span>
+              <span>Ctrl+Enter: Analyze</span>
+              <span>Ctrl+D: Descriptions</span>
+              <span>Ctrl+H: High Contrast</span>
             </div>
           </div>
         </div>
