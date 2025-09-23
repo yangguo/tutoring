@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../lib/api';
-import { Search, Filter, BookOpen, Clock, ChevronDown } from 'lucide-react';
+import { Search, Filter, BookOpen, Clock, ChevronDown, Trash2 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { Book } from '../lib/api';
 
@@ -43,6 +43,8 @@ export default function Library() {
     category: '',
     is_public: false,
   });
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<BookData | null>(null);
   const { user } = useAuthStore();
 
   const categories = [
@@ -151,6 +153,32 @@ export default function Library() {
     setSearchQuery('');
   };
 
+  const handleDeleteBook = async (book: BookData) => {
+    if (!user) return;
+    
+    setDeleting(book.id);
+    try {
+      await api.deleteBook(book.id);
+      
+      // Remove the book from the local state
+      setBooks(prev => prev.filter(b => b.id !== book.id));
+      setFilteredBooks(prev => prev.filter(b => b.id !== book.id));
+      
+      // Close confirmation dialog
+      setDeleteConfirm(null);
+      
+      // Show success message (you could add a toast notification here)
+      console.log(`Book "${book.title}" deleted successfully`);
+      
+    } catch (error) {
+      console.error('Error deleting book:', error);
+      // You could add error toast notification here
+      alert('Failed to delete book. Please try again.');
+    } finally {
+      setDeleting(null);
+    }
+  };
+
   const getDifficultyColor = (difficulty: string) => {
     switch (difficulty) {
       case 'Beginner': return 'bg-green-100 text-green-800';
@@ -216,9 +244,9 @@ export default function Library() {
 
         {/* PDF shortcut removed; click the cover to open */}
 
-        {/* Edit button for owner/admin */}
+        {/* Edit and Delete buttons for owner/admin */}
         {(user && (book.uploaded_by === user.id || user.role === 'admin')) && (
-          <div className="pt-3 flex justify-end">
+          <div className="pt-3 flex justify-end space-x-2">
             <button
               type="button"
               onClick={(e) => {
@@ -235,6 +263,23 @@ export default function Library() {
               className="text-xs text-gray-600 hover:text-gray-900 px-2 py-1 rounded-md border border-gray-300 hover:bg-gray-50"
             >
               Edit
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setDeleteConfirm(book);
+              }}
+              className="text-xs text-red-600 hover:text-red-900 px-2 py-1 rounded-md border border-red-300 hover:bg-red-50 flex items-center space-x-1"
+              disabled={deleting === book.id}
+            >
+              {deleting === book.id ? (
+                <div className="w-3 h-3 border border-red-500 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Trash2 className="w-3 h-3" />
+              )}
+              <span>Delete</span>
             </button>
           </div>
         )}
@@ -531,6 +576,48 @@ export default function Library() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4">
+              Delete Book
+            </h3>
+            <p className="text-gray-600 mb-6">
+              Are you sure you want to delete "<strong>{deleteConfirm.title}</strong>"? 
+              This action cannot be undone and will also delete all related reading sessions, 
+              discussions, and progress data.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
+                disabled={deleting === deleteConfirm.id}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => handleDeleteBook(deleteConfirm)}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center space-x-2"
+                disabled={deleting === deleteConfirm.id}
+              >
+                {deleting === deleteConfirm.id ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    <span>Delete</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

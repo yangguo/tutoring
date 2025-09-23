@@ -248,6 +248,27 @@ upload.delete('/book/:bookId', async (c) => {
       return c.json({ error: 'Permission denied' }, 403);
     }
 
+    // Remove book from associated lesson plans
+    const { data: plans, error: planFindError } = await supabase
+      .from('lesson_plans')
+      .select('id, book_ids')
+      .contains('book_ids', [bookId]);
+
+    if (planFindError) {
+      console.error('Failed to find lesson plans:', planFindError.message);
+    } else if (plans && plans.length > 0) {
+      for (const plan of plans) {
+        const newBookIds = plan.book_ids.filter((bid: string) => bid !== bookId);
+        const { error: planUpdateError } = await supabase
+          .from('lesson_plans')
+          .update({ book_ids: newBookIds })
+          .eq('id', plan.id);
+        if (planUpdateError) {
+          console.error('Failed to update lesson plan:', planUpdateError.message);
+        }
+      }
+    }
+
     // Get all book pages to delete their files
     const { data: pages } = await supabase
       .from('book_pages')

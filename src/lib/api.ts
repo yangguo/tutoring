@@ -349,7 +349,7 @@ class ApiClient {
   }
 
   async deleteBook(bookId: string) {
-    return this.request(`/api/upload/book/${bookId}`, { method: 'DELETE' });
+    return this.request(`/api/library/${bookId}`, { method: 'DELETE' });
   }
 
   async updateBook(bookId: string, updates: Partial<{
