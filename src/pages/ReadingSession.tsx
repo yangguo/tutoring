@@ -52,6 +52,7 @@ const ReadingSession: React.FC = () => {
   const [autoReadDescriptions, setAutoReadDescriptions] = useState(false);
   const [showDiscussion, setShowDiscussion] = useState(false);
   const [isReadingDescription, setIsReadingDescription] = useState(false);
+  const [regeneratingAll, setRegeneratingAll] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [convertingPdf, setConvertingPdf] = useState(false);
   const [conversionMessage, setConversionMessage] = useState<string | null>(null);
@@ -385,6 +386,60 @@ const ReadingSession: React.FC = () => {
     }
   };
 
+  const regenerateAllDescriptions = async () => {
+    if (!bookId || regeneratingAll) return;
+
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      'Are you sure you want to regenerate all image descriptions for this book? This will analyze all images again and may take a few minutes. The process cannot be interrupted once started.'
+    );
+
+    if (!confirmed) return;
+
+    setRegeneratingAll(true);
+    try {
+      const response = await fetch(buildApiUrl(`/api/books/${bookId}/regenerate-all-descriptions`), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Refresh book data to get updated descriptions
+        await fetchBookData();
+        
+        // Clear local image descriptions cache to force reload
+        setImageDescriptions({});
+
+        const { regenerated_pages, failed_pages, total_pages } = data.results;
+        
+        if (failed_pages === 0) {
+          toast.success(`Successfully regenerated all ${regenerated_pages} image descriptions!`);
+        } else if (regenerated_pages > 0) {
+          toast.warning(`Regenerated ${regenerated_pages} of ${total_pages} image descriptions. ${failed_pages} failed.`);
+        } else {
+          toast.error('Failed to regenerate any image descriptions. Please try again.');
+        }
+      } else {
+        const errorText = await response.text();
+        try {
+          const errorJson = JSON.parse(errorText);
+          throw new Error(errorJson.error || 'Failed to regenerate all descriptions');
+        } catch (e) {
+          throw new Error(errorText || 'Failed to regenerate all descriptions');
+        }
+      }
+    } catch (error) {
+      console.error('Error regenerating all descriptions:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to regenerate all descriptions');
+    } finally {
+      setRegeneratingAll(false);
+    }
+  };
+
   const stopSpeaking = () => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       speechSynthesis.cancel();
@@ -671,6 +726,25 @@ const ReadingSession: React.FC = () => {
                 >
                   <Eye className="h-4 w-4 inline mr-2" />
                   Descriptions
+                </button>
+                
+                <button
+                  onClick={regenerateAllDescriptions}
+                  disabled={regeneratingAll}
+                  className={`px-4 py-2 rounded-lg transition-colors ${
+                    regeneratingAll
+                      ? 'bg-orange-500 text-white'
+                      : 'bg-orange-600 text-white hover:bg-orange-700'
+                  }`}
+                  aria-label="Regenerate all image descriptions"
+                  title="Regenerate AI descriptions for all images in this book"
+                >
+                  {regeneratingAll ? (
+                    <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full inline mr-2" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 inline mr-2" />
+                  )}
+                  Regenerate All
                 </button>
                 
                 <button

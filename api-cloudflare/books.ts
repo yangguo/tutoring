@@ -1111,6 +1111,212 @@ books.post('/:bookId/analyze-images', jwtMiddleware, async (c) => {
   }
 });
 
+// Regenerate all image descriptions for a book
+books.post('/:bookId/regenerate-all-descriptions', jwtMiddleware, async (c) => {
+  try {
+    const { bookId } = c.req.param();
+    const user = c.get('user');
+    
+    if (!bookId) {
+      return c.json({ error: 'Book ID is required' }, 400);
+    }
+
+    const supabase = createSupabaseClient(c.env);
+
+    // Verify book exists and user has permission
+    const { data: book, error: bookError } = await supabase
+      .from('books')
+      .select('id, title, uploaded_by')
+      .eq('id', bookId)
+      .single();
+
+    if (bookError || !book) {
+      return c.json({ error: 'Book not found' }, 404);
+    }
+
+    // Check permissions: admin or book owner
+    if (user.role !== 'admin' && book.uploaded_by !== user.userId) {
+      return c.json({ error: 'Permission denied' }, 403);
+    }
+
+    // Get all pages for this book that have images
+    const { data: pages, error: pagesError } = await supabase
+      .from('book_pages')
+      .select('id, page_number, image_url, image_description')
+      .eq('book_id', bookId)
+      .order('page_number');
+
+    if (pagesError) {
+      console.error('Failed to fetch book pages:', pagesError);
+      return c.json({ error: 'Failed to fetch book pages' }, 500);
+    }
+
+    if (!pages || pages.length === 0) {
+      return c.json({ error: 'No pages found for this book' }, 404);
+    }
+
+    const results = {
+      total_pages: pages.length,
+      regenerated_pages: 0,
+      failed_pages: 0,
+      details: [] as Array<{
+        page_id: string;
+        page_number: number;
+        status: 'regenerated' | 'failed';
+        error?: string;
+      }>
+    };
+
+    logger.info('Starting batch image description regeneration', { 
+      bookId, 
+      bookTitle: book.title, 
+      totalPages: pages.length,
+      userId: user.userId 
+    });
+
+    // Process each page
+    for (const page of pages) {
+      try {
+        if (!page.image_url) {
+          results.failed_pages++;
+          results.details.push({
+            page_id: page.id,
+            page_number: page.page_number,
+            status: 'failed',
+            error: 'No image URL found'
+          });
+          continue;
+        }
+
+        // Add delay to avoid rate limiting (3 seconds between requests)
+        if (results.regenerated_pages > 0) {
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+
+        let newDescription: string | null = null;
+
+        // Try to generate description using OpenAI
+        try {
+          if (!c.env.OPENAI_API_KEY || c.env.OPENAI_API_KEY.length < 10) {
+            throw new Error('OpenAI configuration invalid');
+          }
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 180000) as unknown as number; // 180 second timeout (3 minutes)
+
+          const baseUrl = c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+          const apiUrl = baseUrl.endsWith('/') ? `${baseUrl}chat/completions` : `${baseUrl}/chat/completions`;
+          
+          const openaiResponse = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: c.env.OPENAI_VISION_MODEL || 'gpt-4-vision-preview',
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are an educational assistant for children learning English. Analyze the image and provide a detailed, engaging, age-appropriate description suitable for a children\'s book. Focus on describing what\'s happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and engaging for young learners.'
+                },
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: `Please analyze this image from a children's book and provide a detailed, engaging description. This is page ${page.page_number} from "${book.title}". Focus on describing what's happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and age-appropriate for children aged 3-12. Include sensory details and emotional elements that will help children connect with the story.`
+                    },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: page.image_url,
+                        detail: 'high'
+                      }
+                    }
+                  ]
+                }
+              ],
+              max_tokens: 1200,
+              temperature: 0.3
+            }),
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+
+          if (openaiResponse.ok) {
+            const openaiResult = await openaiResponse.json() as OpenAIResponse;
+            if (openaiResult.choices && openaiResult.choices[0] && openaiResult.choices[0].message) {
+              newDescription = openaiResult.choices[0].message.content || null;
+            }
+          }
+        } catch (aiError) {
+          console.warn('AI generation failed for page:', page.page_number, aiError);
+        }
+
+        // Fallback to basic description if AI failed
+        if (!newDescription) {
+          newDescription = generateBasicImageDescription(page.image_url, `Page ${page.page_number} from ${book.title}`);
+        }
+
+        // Update the page with the new description
+        const { error: updateError } = await supabase
+          .from('book_pages')
+          .update({ image_description: newDescription })
+          .eq('id', page.id);
+
+        if (updateError) {
+          throw new Error(`Database update failed: ${updateError.message}`);
+        }
+
+        results.regenerated_pages++;
+        results.details.push({
+          page_id: page.id,
+          page_number: page.page_number,
+          status: 'regenerated'
+        });
+
+        logger.info('Successfully regenerated description for page', { 
+          pageId: page.id, 
+          pageNumber: page.page_number, 
+          bookId 
+        });
+
+      } catch (error) {
+        results.failed_pages++;
+        results.details.push({
+          page_id: page.id,
+          page_number: page.page_number,
+          status: 'failed',
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+
+        logger.error('Failed to regenerate description for page', error, { 
+          pageId: page.id, 
+          pageNumber: page.page_number, 
+          bookId 
+        });
+      }
+    }
+
+    logger.info('Batch image description regeneration completed', { 
+      bookId, 
+      results,
+      userId: user.userId 
+    });
+
+    return c.json({
+      message: `Batch regeneration completed for ${book.title}`,
+      results
+    });
+
+  } catch (error) {
+    logger.error('Batch regeneration error', error, { bookId: c.req.param('bookId') });
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
 books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async (c) => {
   let timeoutId: number | null = null;
   
@@ -1179,7 +1385,7 @@ books.post('/:bookId/pages/:pageId/regenerate-description', jwtMiddleware, async
       timeoutId = setTimeout(() => {
         console.log('OpenAI request timeout triggered');
         controller.abort();
-      }, 60000) as unknown as number; // 60 second timeout
+      }, 180000) as unknown as number; // 180 second timeout (3 minutes)
 
       let openaiResponse;
       try {
