@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
@@ -313,13 +313,17 @@ const ReadingSession: React.FC = () => {
     
     setAnalyzingImage(true);
     try {
-          const response = await fetch(buildApiUrl('/api/books/analyze-image'), {
+      const response = await fetch(buildApiUrl('/api/books/analyze-image'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         },
-        body: JSON.stringify({ image_url: currentPage.image_url })
+        body: JSON.stringify({
+          image_url: currentPage.image_url,
+          page_id: currentPage.id,
+          context: book ? `${book.title} by ${book.author}` : undefined
+        })
       });
       
       const data = await response.json();
@@ -328,7 +332,21 @@ const ReadingSession: React.FC = () => {
           ...prev,
           [currentPage.id]: data.description
         }));
-        
+
+        setShowImageDescription(true);
+
+        setPages(prevPages => {
+          const newPages = [...prevPages];
+          const pageIndex = newPages.findIndex(p => p.id === currentPage.id);
+          if (pageIndex !== -1) {
+            newPages[pageIndex] = {
+              ...newPages[pageIndex],
+              image_description: data.description
+            };
+          }
+          return newPages;
+        });
+
         // Extract vocabulary from the description if available
         if (data.description && data.description.length > 50) {
           try {
@@ -348,7 +366,7 @@ const ReadingSession: React.FC = () => {
             // Don't show error for vocabulary extraction as it's secondary
           }
         }
-        
+
         toast.success('Image analyzed successfully!');
       }
     } catch (error) {
@@ -359,6 +377,16 @@ const ReadingSession: React.FC = () => {
     }
   };
 
+  const currentPageDescription = currentPage ? imageDescriptions[currentPage.id] : undefined;
+
+  const resolvedDescription = useMemo(() => {
+    if (!currentPage) return '';
+    if (currentPageDescription && currentPageDescription.trim().length > 0) {
+      return currentPageDescription;
+    }
+    return currentPage.image_description || '';
+  }, [currentPage, currentPageDescription]);
+
   const regenerateDescription = async () => {
     if (!bookId || !currentPage?.id || regenerating) return;
 
@@ -367,8 +395,12 @@ const ReadingSession: React.FC = () => {
       const response = await fetch(buildApiUrl(`/api/books/${bookId}/pages/${currentPage.id}/regenerate-description`), {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          context: book ? `${book.title} by ${book.author}` : undefined
+        })
       });
 
       if (response.ok) {
@@ -378,6 +410,8 @@ const ReadingSession: React.FC = () => {
           ...prev,
           [currentPage.id]: data.description
         }));
+
+        setShowImageDescription(true);
 
         // Update the pages state
         setPages(prevPages => {
@@ -519,9 +553,8 @@ const ReadingSession: React.FC = () => {
   };
 
   const speakImageDescription = () => {
-    const description = currentPage?.image_description || imageDescriptions[currentPage?.id || ''];
-    if (description && 'speechSynthesis' in window) {
-      speakDescription(description);
+    if (resolvedDescription && 'speechSynthesis' in window) {
+      speakDescription(resolvedDescription);
     } else {
       toast.error('Text-to-speech not available');
     }
@@ -532,11 +565,8 @@ const ReadingSession: React.FC = () => {
       const next = !prev;
       if (!next) {
         stopSpeaking();
-      } else if (next && currentPage) {
-        const description = currentPage.image_description || imageDescriptions[currentPage.id || ''];
-        if (description) {
-          speakDescription(description);
-        }
+      } else if (next && resolvedDescription) {
+        speakDescription(resolvedDescription);
       }
       return next;
     });
@@ -570,13 +600,10 @@ const ReadingSession: React.FC = () => {
 
   // Auto-read descriptions when they become available
   useEffect(() => {
-    if (autoReadDescriptions && currentPage && imageDescriptions[currentPage.id]) {
-      const description = imageDescriptions[currentPage.id];
-      if (description) {
-        speakDescription(description);
-      }
+    if (autoReadDescriptions && resolvedDescription) {
+      speakDescription(resolvedDescription);
     }
-  }, [imageDescriptions, currentPage?.id, autoReadDescriptions]);
+  }, [resolvedDescription, autoReadDescriptions]);
 
   if (loading) {
     return (
@@ -992,8 +1019,8 @@ const ReadingSession: React.FC = () => {
           {/* Screen Reader Instructions */}
           <div className="sr-only" aria-live="polite">
             Reading session for {book?.title}. Page {currentPageIndex + 1} of {pages.length}.
-            {currentPage?.image_description && showImageDescription && 
-              `Image description available: ${currentPage.image_description}`
+            {resolvedDescription && showImageDescription && 
+              `Image description available: ${resolvedDescription}`
             }
           </div>
           {/* Main Reading Area */}
@@ -1043,7 +1070,7 @@ const ReadingSession: React.FC = () => {
                         )}
                       </button>
                       
-                      {(currentPage?.image_description || imageDescriptions[currentPage?.id]) && (
+                      {resolvedDescription && (
                         <button
                           onClick={handleDescriptionAudio}
                           className={`p-2 rounded-full shadow-lg transition-colors ${
@@ -1060,7 +1087,7 @@ const ReadingSession: React.FC = () => {
                   </div>
                   
                   {/* Image Description */}
-                  {showImageDescription && (currentPage?.image_description || imageDescriptions[currentPage?.id]) && (
+                  {showImageDescription && resolvedDescription && (
                     <div className={`mt-4 p-4 rounded-lg border transition-colors duration-300 ${
                       highContrastMode 
                         ? 'bg-gray-700 border-gray-500 text-white' 
@@ -1115,7 +1142,7 @@ const ReadingSession: React.FC = () => {
                                 }`}>{children}</blockquote>
                               }}
                             >
-                              {currentPage?.image_description || imageDescriptions[currentPage?.id]}
+                              {resolvedDescription}
                             </ReactMarkdown>
                           </div>
                         </div>

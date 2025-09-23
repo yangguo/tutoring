@@ -14,6 +14,40 @@ import speakingPracticeChatHandler from './chat/speaking-practice.js';
 
 const router = Router();
 
+const INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10MB safety limit for inline images
+const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 180_000; // 3 minutes for potentially slower APIs
+
+async function getInlineImageUrl(imageUrl: string): Promise<string | null> {
+  try {
+    const response = await fetch(imageUrl);
+
+    if (!response.ok) {
+      console.warn('Failed to fetch image for OpenAI request', imageUrl, response.status, response.statusText);
+      return null;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+
+    if (!arrayBuffer.byteLength) {
+      console.warn('Fetched image is empty, skipping inline conversion', imageUrl);
+      return null;
+    }
+
+    if (arrayBuffer.byteLength > INLINE_IMAGE_MAX_BYTES) {
+      console.warn('Fetched image exceeds inline size limit, falling back to public URL', imageUrl);
+      return null;
+    }
+
+    const contentType = response.headers.get('content-type') ?? 'image/png';
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+
+    return `data:${contentType};base64,${base64}`;
+  } catch (error) {
+    console.warn('Unable to inline image for OpenAI request', imageUrl, error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // Achievements Routes
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -670,6 +704,48 @@ router.get('/books', async (req: Request, res: Response): Promise<void> => {
   }
 });
 
+router.get('/books/discussions', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { userId } = (req as any).user;
+    const { book_id, page = 1, limit = 20 } = req.query;
+    
+    const offset = (Number(page) - 1) * Number(limit);
+
+    let query = supabase
+      .from('book_discussions')
+      .select (
+        `*,
+        books (
+          id,
+          title
+        )`
+      )
+      .eq('user_id', userId);
+
+    if (book_id) {
+      query = query.eq('book_id', book_id);
+    }
+
+    const { data: discussions, error } = await query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + Number(limit) - 1);
+
+    if (error) {
+      res.status(500).json({ error: 'Failed to fetch discussions' });
+      return;
+    }
+
+    res.json({
+      discussions: discussions || [],
+      page: Number(page),
+      limit: Number(limit)
+    });
+  } catch (error) {
+    console.error('Get discussions error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get('/books/:bookId', async (req: Request, res: Response): Promise<void> => {
   try {
     const { bookId } = req.params;
@@ -1216,109 +1292,178 @@ router.post('/books/analyze-image', authenticateToken, async (req: Request, res:
       return;
     }
 
-    // Enhanced image analysis using OpenAI GPT-4 Vision
-    let openaiResponse;
-    try {
-      // Check if OpenAI configuration is available and valid
-      if (!process.env.OPENAI_BASE_URL || 
-          !process.env.OPENAI_API_KEY || 
-          process.env.OPENAI_API_KEY === 'your-openai-api-key-here' ||
-          process.env.OPENAI_API_KEY.length < 10) {
-        console.warn('OpenAI configuration missing or invalid, falling back to basic description');
-        const basicDescription = generateBasicImageDescription(image_url, context);
-        res.json({ description: basicDescription, vocabulary: [] });
-        return;
-      }
+    // Enhanced image analysis using OpenAI Vision models
+    const fallbackAnalysis = () => ({
+      description: generateBasicImageDescription(image_url, context),
+      vocabulary: []
+    });
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for vision API
-      
+    let analysisResult: { description: string; vocabulary: Array<any> } | null = null;
+    let usedFallback = false;
+    const fallbackReasons: string[] = [];
+
+    const ensureFallback = (reason: string) => {
+      fallbackReasons.push(reason);
+      console.warn(reason);
+      if (!usedFallback) {
+        usedFallback = true;
+        analysisResult = fallbackAnalysis();
+      }
+    };
+
+    const hasValidOpenAIConfig = Boolean(
+      process.env.OPENAI_BASE_URL &&
+      process.env.OPENAI_API_KEY &&
+      process.env.OPENAI_API_KEY !== 'your-openai-api-key-here' &&
+      (process.env.OPENAI_API_KEY?.length ?? 0) >= 10
+    );
+
+    if (!hasValidOpenAIConfig) {
+      ensureFallback('OpenAI configuration missing or invalid, using basic image description.');
+    } else {
       try {
-        openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'gpt-4-vision-preview',
-            messages: [
-              {
-                role: 'system',
-                content: 'You are an educational assistant for children learning English. Analyze the image and provide an age-appropriate, educational description. Also extract 3-5 key vocabulary words that children can learn from this image. Return a JSON response with "description" (string) and "vocabulary" (array of objects with "word", "definition", and "difficulty_level" fields).'
-              },
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'text',
-                    text: `Please analyze this image from a children's book. Context: ${context || 'General children\'s book illustration'}. Provide an educational description suitable for children aged 3-12, and identify key vocabulary words they can learn.`
-                  },
-                  {
-                    type: 'image_url',
-                    image_url: {
-                      url: image_url,
-                      detail: 'high'
+        const controller = new AbortController();
+        const visionTimeoutRaw = process.env.OPENAI_VISION_TIMEOUT_MS;
+        const parsedTimeout = visionTimeoutRaw ? Number.parseInt(visionTimeoutRaw, 10) : Number.NaN;
+        const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0
+          ? parsedTimeout
+          : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
+
+        const openaiVisionModel = process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo';
+        const inlineImageUrl = await getInlineImageUrl(image_url);
+        const openaiImageSource = inlineImageUrl ?? image_url;
+
+        const startTime = Date.now();
+        const timeoutId = setTimeout(() => {
+          const elapsed = Date.now() - startTime;
+          console.warn(`OpenAI Vision API timeout after ${elapsed}ms (limit: ${timeoutMs}ms)`);
+          controller.abort();
+        }, timeoutMs);
+
+        try {
+          const openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: openaiVisionModel,
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are an educational assistant for children learning English. Provide a detailed, age-appropriate description for this book page.'
+                },
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Please describe this children\'s book page image clearly and engagingly. Focus on characters, actions, setting, and any educational details.'
+                    },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: openaiImageSource,
+                        detail: inlineImageUrl ? undefined : 'auto'
+                      }
                     }
-                  }
-                ]
+                  ]
+                }
+              ],
+              max_tokens: 512,
+              temperature: 0.3
+            }),
+            signal: controller.signal
+          });
+
+          const elapsed = Date.now() - startTime;
+          console.log(`OpenAI Vision API request completed in ${elapsed}ms`);
+          clearTimeout(timeoutId);
+
+          if (!openaiResponse.ok) {
+            console.error('OpenAI Vision API error:', await openaiResponse.text());
+            ensureFallback('OpenAI Vision API returned a non-200 response.');
+          } else {
+            const openaiResult = await openaiResponse.json();
+            const rawContent = openaiResult.choices?.[0]?.message?.content;
+
+            const extractContentString = (content: unknown): string | null => {
+              if (!content) return null;
+              if (typeof content === 'string') return content;
+              if (Array.isArray(content)) {
+                return content
+                  .map(part => {
+                    if (typeof part === 'string') return part;
+                    if (typeof part === 'object' && part && 'text' in part) {
+                      return String((part as { text?: string }).text ?? '');
+                    }
+                    return '';
+                  })
+                  .join('\n')
+                  .trim() || null;
               }
-            ],
-            max_tokens: 800,
-            temperature: 0.3
-          }),
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-      } catch (abortError) {
-        clearTimeout(timeoutId);
-        throw abortError;
-      }
-    } catch (fetchError) {
-      console.error('OpenAI Vision API fetch error:', fetchError);
-      // Fallback to basic description on network error
-      const basicDescription = generateBasicImageDescription(image_url, context);
-      res.json({ description: basicDescription, vocabulary: [] });
-      return;
-    }
+              return null;
+            };
 
-    if (!openaiResponse.ok) {
-      console.error('OpenAI Vision API error:', await openaiResponse.text());
-      // Fallback to basic description
-      const basicDescription = generateBasicImageDescription(image_url, context);
-      res.json({ description: basicDescription, vocabulary: [] });
-      return;
-    }
+            const cleanedContent = extractContentString(rawContent)
+              ?.replace(/```json|```/g, '')
+              .trim();
 
-    const openaiResult = await openaiResponse.json();
-    const aiContent = openaiResult.choices[0]?.message?.content;
-
-    try {
-      const analysis = JSON.parse(aiContent);
-      
-      // Update page with image description if page_id provided
-      if (page_id) {
-        const { error: updateError } = await supabase
-          .from('book_pages')
-          .update({ image_description: analysis.description })
-          .eq('id', page_id);
-
-        if (updateError) {
-          console.error('Failed to update page with image description:', updateError);
+            if (!cleanedContent) {
+              console.error('OpenAI Vision response did not contain content.');
+              ensureFallback('OpenAI Vision response missing content.');
+            } else {
+              const detailedDescription = cleanedContent.trim();
+              if (!detailedDescription) {
+                ensureFallback('OpenAI Vision description was empty after trimming.');
+              } else {
+                analysisResult = {
+                  description: detailedDescription,
+                  vocabulary: []
+                };
+              }
+            }
+          }
+        } catch (fetchError) {
+          const elapsed = Date.now() - startTime;
+          console.error(`OpenAI Vision API aborted after ${elapsed}ms:`, fetchError);
+          clearTimeout(timeoutId);
+          if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+            console.error('This error occurred due to request timeout. Consider increasing OPENAI_VISION_TIMEOUT_MS environment variable.');
+          }
+          ensureFallback('OpenAI Vision API request failed.');
         }
+      } catch (error) {
+        console.error('Unexpected error while performing OpenAI analysis:', error);
+        ensureFallback('Unexpected error during OpenAI analysis.');
       }
-
-      res.json({
-        description: analysis.description || 'This image shows an interesting scene from the story.',
-        vocabulary: analysis.vocabulary || [],
-        updated_page: !!page_id
-      });
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', parseError);
-      // Fallback to basic description if AI response is not valid JSON
-      const basicDescription = generateBasicImageDescription(image_url, context);
-      res.json({ description: basicDescription, vocabulary: [] });
     }
+
+    if (!analysisResult) {
+      ensureFallback('OpenAI analysis did not produce a result.');
+    }
+
+    const { description, vocabulary } = analysisResult!;
+
+    if (page_id && description) {
+      const { error: updateError } = await supabase
+        .from('book_pages')
+        .update({ image_description: description })
+        .eq('id', page_id);
+
+      if (updateError) {
+        console.error('Failed to update page with image description:', updateError);
+      }
+    }
+
+    res.json({
+      description,
+      vocabulary,
+      updated_page: !!page_id,
+      used_fallback: usedFallback,
+      fallback_reasons: usedFallback ? fallbackReasons : []
+    });
   } catch (error) {
     console.error('Image analysis error:', error);
     // Fallback to basic description
@@ -1693,48 +1838,6 @@ router.post('/books/discuss', authenticateToken, async (req: Request, res: Respo
     });
   } catch (error) {
     console.error('Book discussion error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-router.get('/books/discussions', authenticateToken, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { userId } = (req as any).user;
-    const { book_id, page = 1, limit = 20 } = req.query;
-    
-    const offset = (Number(page) - 1) * Number(limit);
-
-    let query = supabase
-      .from('book_discussions')
-      .select (
-        `*,
-        books (
-          id,
-          title
-        )`
-      )
-      .eq('user_id', userId);
-
-    if (book_id) {
-      query = query.eq('book_id', book_id);
-    }
-
-    const { data: discussions, error } = await query
-      .order('created_at', { ascending: false })
-      .range(offset, offset + Number(limit) - 1);
-
-    if (error) {
-      res.status(500).json({ error: 'Failed to fetch discussions' });
-      return;
-    }
-
-    res.json({
-      discussions: discussions || [],
-      page: Number(page),
-      limit: Number(limit)
-    });
-  } catch (error) {
-    console.error('Get discussions error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -2250,46 +2353,96 @@ router.post('/books/:bookId/pages/:pageId/regenerate-description', authenticateT
 
     // 2. Analyze the image with OpenAI
     let newDescription: string | null = null;
+    let usedFallback = false;
+    const { context } = req.body ?? {};
+
     try {
-      const openaiConfig = process.env.OPENAI_API_KEY ? { apiKey: process.env.OPENAI_API_KEY } : null;
+      if (!process.env.OPENAI_BASE_URL ||
+          !process.env.OPENAI_API_KEY ||
+          process.env.OPENAI_API_KEY === 'your-openai-api-key-here' ||
+          process.env.OPENAI_API_KEY.length < 10) {
+        console.warn('OpenAI configuration missing or invalid during regeneration, falling back to basic description');
+      } else {
+        const controller = new AbortController();
+        const visionTimeoutRaw = process.env.OPENAI_VISION_TIMEOUT_MS;
+        const parsedTimeout = visionTimeoutRaw ? Number.parseInt(visionTimeoutRaw, 10) : Number.NaN;
+        const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0
+          ? parsedTimeout
+          : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
 
-      if (openaiConfig) {
-        const { OpenAI } = await import('openai');
-        const openai = new OpenAI(openaiConfig);
+        const openaiVisionModel = process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo';
+        const inlineImageUrl = await getInlineImageUrl(image_url);
+        const openaiImageSource = inlineImageUrl ?? image_url;
 
-        const response = await openai.chat.completions.create({
-          model: process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo',
-          messages: [
-            {
-              role: "user",
-              content: [
+        const startTime = Date.now();
+        const timeoutId = setTimeout(() => {
+          const elapsed = Date.now() - startTime;
+          console.warn(`OpenAI Vision API timeout during regeneration after ${elapsed}ms (limit: ${timeoutMs}ms)`);
+          controller.abort();
+        }, timeoutMs);
+
+        try {
+          const response = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: openaiVisionModel,
+              messages: [
                 {
-                  type: "text",
-                  text: "Analyze this children\'s book page image. Provide a detailed, educational description suitable for English language learners. Focus on objects, characters, actions, and educational content. Keep it age-appropriate and engaging."
+                  role: 'system',
+                  content: 'You are an educational assistant for children learning English. Provide a detailed, age-appropriate description for this book page.'
                 },
                 {
-                  type: "image_url",
-                  image_url: {
-                    url: image_url,
-                  }
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Please describe this children\'s book page image clearly and engagingly. Focus on characters, actions, setting, and any educational details.'
+                    },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: openaiImageSource,
+                        detail: inlineImageUrl ? undefined : 'auto'
+                      }
+                    }
+                  ]
                 }
-              ]
-            }
-          ],
-          max_tokens: 1024
-        });
-        
-        newDescription = response.choices[0]?.message?.content || null;
+              ],
+              max_tokens: 512,
+              temperature: 0.3
+            }),
+            signal: controller.signal
+          });
+          const elapsed = Date.now() - startTime;
+          console.log(`OpenAI Vision API request completed in ${elapsed}ms for regeneration`);
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            console.error('OpenAI Vision API error during regeneration:', await response.text());
+          } else {
+            const openaiResult = await response.json();
+            newDescription = openaiResult.choices[0]?.message?.content?.trim() || null;
+          }
+        } catch (fetchError) {
+          const elapsed = Date.now() - startTime;
+          console.error(`OpenAI Vision API aborted after ${elapsed}ms during regeneration:`, fetchError);
+          clearTimeout(timeoutId);
+          if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+            console.error('Regeneration request timed out. Consider increasing OPENAI_VISION_TIMEOUT_MS.');
+          }
+        }
       }
     } catch (error) {
-      console.log('AI image analysis failed:', error instanceof Error ? error.message : String(error));
-      res.status(500).json({ error: 'Failed to analyze image' });
-      return;
+      console.error('Unexpected error during regeneration analysis:', error);
     }
 
     if (!newDescription) {
-      res.status(500).json({ error: 'Failed to generate new description' });
-      return;
+      newDescription = generateBasicImageDescription(image_url, context);
+      usedFallback = true;
     }
 
     // 3. Update the page with the new description
@@ -2313,7 +2466,9 @@ router.post('/books/:bookId/pages/:pageId/regenerate-description', authenticateT
 
     res.json({
       message: 'Description regenerated successfully',
-      description: newDescription
+      description: newDescription,
+      updated_page: true,
+      used_fallback: usedFallback
     });
 
   } catch (error) {
