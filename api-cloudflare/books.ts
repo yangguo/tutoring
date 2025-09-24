@@ -4,19 +4,27 @@ import { verifyToken, jwtMiddleware, type SessionPayload } from './utils/jwt';
 
 // Enhanced logging utility
 const logger = {
-  error: (message: string, error?: any, context?: Record<string, any>) => {
+  error: (message: string, error?: unknown, context?: Record<string, unknown>) => {
     const timestamp = new Date().toISOString();
-    const logData = {
+    const logData: Record<string, unknown> = {
       timestamp,
       level: 'ERROR',
       message,
-      error: error?.message || error,
-      stack: error?.stack,
       ...context
     };
+
+    if (error instanceof Error) {
+      logData.error = error.message;
+      if (error.stack) {
+        logData.stack = error.stack;
+      }
+    } else if (error !== undefined) {
+      logData.error = String(error);
+    }
+
     console.error(JSON.stringify(logData));
   },
-  warn: (message: string, context?: Record<string, any>) => {
+  warn: (message: string, context?: Record<string, unknown>) => {
     const timestamp = new Date().toISOString();
     const logData = {
       timestamp,
@@ -26,7 +34,7 @@ const logger = {
     };
     console.warn(JSON.stringify(logData));
   },
-  info: (message: string, context?: Record<string, any>) => {
+  info: (message: string, context?: Record<string, unknown>) => {
     const timestamp = new Date().toISOString();
     const logData = {
       timestamp,
@@ -38,13 +46,66 @@ const logger = {
   }
 };
 
+const INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10MB limit for inline images
+const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 180_000; // 3 minutes, matches Express API default
+
+const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
+  let binary = '';
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+
+  return btoa(binary);
+};
+
+async function getInlineImageUrl(imageUrl: string): Promise<string | null> {
+  try {
+    const response = await fetch(imageUrl);
+
+    if (!response.ok) {
+      logger.warn('Failed to fetch image for OpenAI request', {
+        imageUrl,
+        status: response.status,
+        statusText: response.statusText
+      });
+      return null;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+
+    if (!arrayBuffer.byteLength) {
+      logger.warn('Fetched image is empty, skipping inline conversion', { imageUrl });
+      return null;
+    }
+
+    if (arrayBuffer.byteLength > INLINE_IMAGE_MAX_BYTES) {
+      logger.warn('Fetched image exceeds inline size limit, falling back to public URL', {
+        imageUrl,
+        bytes: arrayBuffer.byteLength
+      });
+      return null;
+    }
+
+    const contentType = response.headers.get('content-type') ?? 'image/png';
+    return `data:${contentType};base64,${arrayBufferToBase64(arrayBuffer)}`;
+  } catch (error) {
+    logger.warn('Unable to inline image for OpenAI request', {
+      imageUrl,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return null;
+  }
+}
+
 // Error recovery utility
 const withRetry = async <T>(
   operation: () => Promise<T>,
   maxRetries: number = 3,
   delay: number = 1000
 ): Promise<T> => {
-  let lastError: any;
+  let lastError: unknown;
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -96,14 +157,40 @@ type BooksBindings = {
     SUPABASE_KEY: string;
     JWT_SECRET: string;
     OPENAI_API_KEY: string;
-    OPENAI_MODEL: string;
-    OPENAI_VISION_MODEL: string;
+    OPENAI_MODEL?: string;
+    OPENAI_VISION_MODEL?: string;
     OPENAI_BASE_URL?: string;
+    OPENAI_VISION_TIMEOUT_MS?: string;
     NODE_ENV?: string;
   };
   Variables: {
     user: SessionPayload;
   };
+};
+
+type VocabularyEntry = {
+  word: string;
+  definition: string;
+  difficulty_level?: string;
+  part_of_speech?: string;
+  example_sentence?: string;
+};
+
+type ImageAnalysisResult = {
+  description: string;
+  vocabulary: VocabularyEntry[];
+};
+
+type AnalyzeImageRequestPayload = {
+  image_url?: string;
+  page_id?: string;
+  context?: string;
+};
+
+type ExtractVocabularyPayload = {
+  description?: string;
+  difficulty_level?: string;
+  max_words?: number;
 };
 
 const books = new Hono<BooksBindings>();
@@ -603,235 +690,294 @@ function generateBasicImageDescription(_imageUrl: string, context?: string): str
 
 // POST /analyze-image - Analyze image and extract description and vocabulary
 books.post('/analyze-image', jwtMiddleware, async (c) => {
-  // Declare variables outside try block for scope access in catch blocks
-  let image_url: string = '';
-  let page_id: string | undefined;
-  let context: string | undefined;
-  let timeoutId: number | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
+  const user = c.get('user');
+  if (!user) {
+    return c.json({ error: 'Authentication required' }, 401);
+  }
+
+  let requestData: AnalyzeImageRequestPayload;
   try {
-    // Get user from JWT middleware context
-    const user = c.get('user');
-    if (!user) {
-      return c.json({ error: 'Authentication required' }, 401);
-    }
+    requestData = await c.req.json<AnalyzeImageRequestPayload>();
+  } catch (jsonError) {
+    logger.error('Failed to parse request JSON', jsonError);
+    return c.json({ error: 'Invalid JSON in request body' }, 400);
+  }
 
-    let requestData;
+  if (!requestData || typeof requestData !== 'object') {
+    logger.warn('Invalid analyze-image request payload structure');
+    return c.json({ error: 'Invalid request body' }, 400);
+  }
+
+  const image_url: string | undefined = requestData.image_url;
+  const page_id: string | undefined = requestData.page_id;
+  const context: string | undefined = requestData.context;
+
+  if (!image_url) {
+    return c.json({ error: 'Image URL is required' }, 400);
+  }
+
+  const supabase = createSupabaseClient(c.env);
+
+  const fallbackAnalysis = (): ImageAnalysisResult => ({
+    description: generateBasicImageDescription(image_url, context),
+    vocabulary: []
+  });
+
+  let analysisResult: ImageAnalysisResult | null = null;
+  let usedFallback = false;
+  const fallbackReasons: string[] = [];
+
+  const ensureFallback = (reason: string, err?: unknown) => {
+    fallbackReasons.push(reason);
+    const contextData: Record<string, unknown> = {
+      image_url,
+      reason
+    };
+    if (err instanceof Error) {
+      contextData.error = err.message;
+    } else if (err !== undefined) {
+      contextData.error = String(err);
+    }
+    logger.warn(reason, contextData);
+    if (!usedFallback) {
+      usedFallback = true;
+      analysisResult = fallbackAnalysis();
+    }
+  };
+
+  const hasValidOpenAIConfig = Boolean(
+    c.env.OPENAI_API_KEY &&
+    c.env.OPENAI_API_KEY !== 'your-openai-api-key-here' &&
+    c.env.OPENAI_API_KEY.length >= 10
+  );
+
+  if (!hasValidOpenAIConfig) {
+    ensureFallback('OpenAI configuration missing or invalid, using basic image description.');
+  } else {
+    const baseUrl = (c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+    const apiUrl = `${baseUrl}/chat/completions`;
+    const visionTimeoutRaw = c.env.OPENAI_VISION_TIMEOUT_MS;
+    const parsedTimeout = visionTimeoutRaw ? Number.parseInt(visionTimeoutRaw, 10) : Number.NaN;
+    const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0
+      ? parsedTimeout
+      : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
+
+    const controller = new AbortController();
+    const startTime = Date.now();
+    timeoutId = setTimeout(() => {
+      const elapsed = Date.now() - startTime;
+      logger.warn('AI Vision API timeout triggered', { elapsed, timeoutMs, image_url });
+      controller.abort();
+    }, timeoutMs);
+
     try {
-      requestData = await c.req.json();
-    } catch (jsonError) {
-      console.error('Failed to parse request JSON:', jsonError);
-      return c.json({ error: 'Invalid JSON in request body' }, 400);
-    }
+      const openaiVisionModel = c.env.OPENAI_VISION_MODEL || 'gpt-4-turbo';
+      const inlineImageUrl = await getInlineImageUrl(image_url);
+      const openaiImageSource = inlineImageUrl ?? image_url;
 
-    image_url = requestData.image_url;
-    page_id = requestData.page_id;
-    context = requestData.context;
-
-    if (!image_url) {
-      return c.json({ error: 'Image URL is required' }, 400);
-    }
-
-    const supabase = createSupabaseClient(c.env);
-
-    // Enhanced image analysis using OpenAI GPT-4 Vision
-      let openaiResponse;
-      try {
-        // Check if OpenAI configuration is available and valid
-        if (!c.env.OPENAI_API_KEY || 
-            c.env.OPENAI_API_KEY === 'your-openai-api-key-here' ||
-            c.env.OPENAI_API_KEY.length < 10) {
-          console.warn('OpenAI configuration missing or invalid, falling back to basic description');
-          const basicDescription = generateBasicImageDescription(image_url, context);
-          return c.json({ description: basicDescription, vocabulary: [] });
-        }
-
-        // Use the configured base URL or default to OpenAI
-        const baseUrl = c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-        const apiUrl = baseUrl.endsWith('/') ? `${baseUrl}chat/completions` : `${baseUrl}/chat/completions`;
-
-        const controller = new AbortController();
-        timeoutId = setTimeout(() => {
-          console.log('AI Vision API timeout triggered');
-          controller.abort();
-        }, 60000) as unknown as number; // 60 second timeout for vision API
-        
-        try {
-          openaiResponse = await fetch(apiUrl, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
-              'Content-Type': 'application/json'
+      const openaiResponse = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: openaiVisionModel,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are an educational assistant for children learning English. Provide a detailed, age-appropriate description for this book page.'
             },
-            body: JSON.stringify({
-              model: c.env.OPENAI_VISION_MODEL || 'gpt-4-vision-preview',
-              messages: [
+            {
+              role: 'user',
+              content: [
                 {
-                  role: 'system',
-                  content: 'You are an educational assistant for children learning English. Analyze the image and provide a detailed, engaging, age-appropriate description suitable for a children\'s book. Focus on describing what\'s happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and engaging for young learners.'
+                  type: 'text',
+                  text: 'Please describe this children\'s book page image clearly and engagingly. Focus on characters, actions, setting, and any educational details.'
                 },
                 {
-                  role: 'user',
-                  content: [
-                    {
-                      type: 'text',
-                      text: `Please analyze this image from a children's book and provide a detailed, engaging description. ${
-                        context ? `Context: ${context}` : 'This is from a children\'s book illustration.'
-                      } Focus on describing what is happening in the scene, the characters, their emotions, and the setting. Make it vivid, educational, and age-appropriate for children aged 3-12. Include sensory details and emotional elements that will help children connect with the story.`
-                    },
-                    {
-                      type: 'image_url',
-                      image_url: {
-                        url: image_url,
-                        detail: 'high'
-                      }
-                    }
-                  ]
+                  type: 'image_url',
+                  image_url: {
+                    url: openaiImageSource,
+                    detail: inlineImageUrl ? undefined : 'auto'
+                  }
                 }
-              ],
-              max_tokens: 1200,
-              temperature: 0.3
-            }),
-          signal: controller.signal
-        });
-        if (timeoutId) clearTimeout(timeoutId);
-      } catch (abortError) {
-        if (timeoutId) clearTimeout(timeoutId);
-        if (abortError instanceof Error && abortError.name === 'AbortError') {
-          console.error('OpenAI Vision API timeout after 30 seconds');
-          // Fallback to basic description on timeout
-          const basicDescription = generateBasicImageDescription(image_url, context);
-          return c.json({ description: basicDescription, vocabulary: [] });
+              ]
+            }
+          ],
+          max_tokens: 512,
+          temperature: 0.3
+        }),
+        signal: controller.signal
+      });
+
+      const elapsed = Date.now() - startTime;
+      logger.info('OpenAI Vision API request completed', { elapsed, image_url });
+
+      if (!openaiResponse.ok) {
+        logger.error('OpenAI Vision API returned non-200 response', await openaiResponse.text());
+        ensureFallback('OpenAI Vision API returned a non-200 response.');
+      } else {
+        const openaiResult = await openaiResponse.json() as OpenAIResponse;
+        const rawContent = openaiResult.choices?.[0]?.message?.content;
+
+        const extractContentString = (content: unknown): string | null => {
+          if (!content) return null;
+          if (typeof content === 'string') return content;
+          if (Array.isArray(content)) {
+            return content
+              .map(part => {
+                if (typeof part === 'string') return part;
+                if (typeof part === 'object' && part && 'text' in part) {
+                  return String((part as { text?: string }).text ?? '');
+                }
+                return '';
+              })
+              .join('\n')
+              .trim() || null;
+          }
+          return null;
+        };
+
+        const cleanedContent = extractContentString(rawContent)
+          ?.replace(/```json|```/g, '')
+          .trim();
+
+        if (!cleanedContent) {
+          ensureFallback('OpenAI Vision response missing content.');
+        } else {
+          analysisResult = {
+            description: cleanedContent,
+            vocabulary: []
+          };
         }
-        throw abortError;
       }
     } catch (fetchError) {
-      console.error('OpenAI Vision API fetch error:', fetchError);
-      // Fallback to basic description on network error
-      const basicDescription = generateBasicImageDescription(image_url, context);
-      return c.json({ description: basicDescription, vocabulary: [] });
-    }
-
-    if (!openaiResponse.ok) {
-      console.error('OpenAI Vision API error:', await openaiResponse.text());
-      // Fallback to basic description
-      const basicDescription = generateBasicImageDescription(image_url, context);
-      return c.json({ description: basicDescription, vocabulary: [] });
-    }
-
-    const openaiResult = await openaiResponse.json() as OpenAIResponse;
-    const aiContent = openaiResult.choices[0]?.message?.content;
-
-    try {
-      const analysis = JSON.parse(aiContent);
-      
-      // Update page with image description if page_id provided
-      if (page_id) {
-        const { error: updateError } = await supabase
-          .from('book_pages')
-          .update({ image_description: analysis.description })
-          .eq('id', page_id);
-
-        if (updateError) {
-          console.error('Failed to update page with image description:', updateError);
-        }
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        logger.error('OpenAI Vision API request aborted due to timeout', fetchError, { timeoutMs });
+        ensureFallback('OpenAI Vision API request timed out.', fetchError);
+      } else {
+        logger.error('OpenAI Vision API request failed', fetchError);
+        ensureFallback('OpenAI Vision API request failed.', fetchError);
       }
-
-      return c.json({
-        description: analysis.description || 'This image shows an interesting scene from the story.',
-        vocabulary: analysis.vocabulary || [],
-        updated_page: !!page_id
-      });
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', parseError);
-      // Fallback to basic description if AI response is not valid JSON
-      const basicDescription = image_url ? generateBasicImageDescription(image_url, context) : 'Unable to analyze image';
-      return c.json({ description: basicDescription, vocabulary: [] });
-    }
-  } catch (error) {
-    // Cleanup timeout if still active
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-    
-    console.error('Image analysis error:', error);
-    
-    // Provide more specific error information
-    if (error instanceof Error) {
-      if (error.message.includes('JSON')) {
-        return c.json({ error: 'Invalid request format' }, 400);
-      } else if (error.message.includes('fetch') || error.message.includes('network')) {
-        return c.json({ error: 'Network error occurred' }, 503);
-      } else if (error.message.includes('timeout')) {
-        return c.json({ error: 'Request timeout' }, 408);
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
       }
-    }
-    
-    // Fallback to basic description if image_url is available
-    if (!image_url) {
-      return c.json({ error: 'Invalid request data' }, 400);
-    }
-    
-    try {
-      const basicDescription = generateBasicImageDescription(image_url, context);
-      return c.json({ description: basicDescription, vocabulary: [] });
-    } catch (fallbackError) {
-      console.error('Failed to generate fallback description:', fallbackError);
-      return c.json({ error: 'Unable to analyze image' }, 500);
+      timeoutId = null;
     }
   }
+
+  if (!analysisResult) {
+    ensureFallback('OpenAI analysis did not produce a result.');
+  }
+
+  const { description, vocabulary } = analysisResult!;
+
+  if (page_id && description) {
+    try {
+      const { error: updateError } = await supabase
+        .from('book_pages')
+        .update({ image_description: description })
+        .eq('id', page_id);
+
+      if (updateError) {
+        logger.error('Failed to update page with image description', updateError, { page_id });
+      }
+    } catch (updateError) {
+      logger.error('Unexpected error while updating page with image description', updateError, { page_id });
+    }
+  }
+
+  return c.json({
+    description,
+    vocabulary,
+    updated_page: !!page_id,
+    used_fallback: usedFallback,
+    fallback_reasons: usedFallback ? fallbackReasons : []
+  });
 });
 
 // Helper function for basic vocabulary extraction
-function extractBasicVocabulary(description: string, difficultyLevel: string, maxWords: number) {
-  const words = description.toLowerCase()
-    .replace(/[^\w\s]/g, ' ')
-    .split(/\s+/)
-    .filter(word => word.length > 3 && word.length < 12)
-    .slice(0, maxWords);
+function extractBasicVocabulary(description: string, difficultyLevel: string, maxWords: number): VocabularyEntry[] {
+  const stopWords = new Set([
+    'this', 'that', 'with', 'from', 'they', 'have', 'been', 'were', 'said', 'each', 'which',
+    'their', 'time', 'will', 'about', 'would', 'there', 'could', 'other', 'more', 'very',
+    'what', 'know', 'just', 'first', 'into', 'over', 'think', 'also', 'your', 'work', 'life',
+    'only', 'still', 'should', 'after', 'being', 'made', 'before', 'here', 'through', 'when',
+    'where', 'much', 'some', 'these', 'many', 'then', 'them', 'well'
+  ]);
 
-  return words.map(word => ({
-    word: word,
-    definition: `A word meaning ${word}`,
+  const words = description.toLowerCase()
+    .replace(/[.,!?;:]/g, '')
+    .split(' ')
+    .filter(word => word.length > 3 && word.length < 12)
+    .filter(word => !stopWords.has(word));
+
+  const uniqueWords = [...new Set(words)].slice(0, maxWords);
+
+  return uniqueWords.map(word => ({
+    word: word.charAt(0).toUpperCase() + word.slice(1),
+    definition: `A word that appears in the story: ${word}`,
     difficulty_level: difficultyLevel,
     part_of_speech: 'noun',
-    example_sentence: `This is an example with ${word}.`
+    example_sentence: `The story mentions ${word}.`
   }));
 }
 
 // Extract vocabulary endpoint
 books.post('/extract-vocabulary', jwtMiddleware, async (c) => {
   try {
-    const { description, difficulty_level = 'beginner', max_words = 5 } = await c.req.json();
+    let payload: ExtractVocabularyPayload;
+    try {
+      payload = await c.req.json<ExtractVocabularyPayload>();
+    } catch (jsonError) {
+      logger.error('Failed to parse vocabulary extraction JSON', jsonError);
+      return c.json({ error: 'Invalid JSON in request body' }, 400);
+    }
+
+    if (!payload || typeof payload !== 'object' || typeof payload.description !== 'string') {
+      return c.json({ error: 'Description is required' }, 400);
+    }
+
     const user = c.get('user');
+    const description = payload.description;
+    const difficulty_level = payload.difficulty_level ?? 'beginner';
+    const max_words = payload.max_words ?? 5;
 
     if (!description) {
       return c.json({ error: 'Description is required' }, 400);
     }
 
     const supabase = createSupabaseClient(c.env);
-    let extractedVocabulary = [];
+    let extractedVocabulary: VocabularyEntry[] = [];
 
     try {
-      // Check if OpenAI configuration is available
-      const openaiApiKey = c.env.OPENAI_API_KEY;
-      const openaiModel = c.env.OPENAI_MODEL || 'gpt-4';
+      const hasValidOpenAIConfig = Boolean(
+        c.env.OPENAI_API_KEY &&
+        c.env.OPENAI_API_KEY !== 'your-openai-api-key-here' &&
+        c.env.OPENAI_API_KEY.length >= 10
+      );
 
-      if (!openaiApiKey || openaiApiKey === 'your-openai-api-key-here' || openaiApiKey.length < 10) {
+      if (!hasValidOpenAIConfig) {
         logger.info('OpenAI configuration missing, using basic vocabulary extraction');
         extractedVocabulary = extractBasicVocabulary(description, difficulty_level, max_words);
       } else {
-        // Use OpenAI for intelligent vocabulary extraction
-        const response = await withRetry(async () => {
-          // Use the configured base URL or default to OpenAI
-          const baseUrl = c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-          const apiUrl = baseUrl.endsWith('/') ? `${baseUrl}chat/completions` : `${baseUrl}/chat/completions`;
-          
-          return await fetch(apiUrl, {
+        const baseUrl = (c.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, '');
+        const apiUrl = `${baseUrl}/chat/completions`;
+        const openaiModel = c.env.OPENAI_MODEL || 'gpt-4';
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10_000);
+
+        let response: Response;
+        try {
+          response = await fetch(apiUrl, {
             method: 'POST',
             headers: {
-              'Authorization': `Bearer ${openaiApiKey}`,
-              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
             },
             body: JSON.stringify({
               model: openaiModel,
@@ -848,18 +994,52 @@ books.post('/extract-vocabulary', jwtMiddleware, async (c) => {
               max_tokens: 500,
               temperature: 0.3
             }),
-            signal: AbortSignal.timeout(10000) // 10 second timeout
+            signal: controller.signal
           });
-        }, 2, 1000);
+        } catch (abortError) {
+          clearTimeout(timeoutId);
+          throw abortError;
+        }
+
+        clearTimeout(timeoutId);
 
         if (response.ok) {
           const openaiResult = await response.json() as OpenAIResponse;
-          const aiContent = openaiResult.choices[0]?.message?.content;
-          
-          try {
-            extractedVocabulary = JSON.parse(aiContent);
-          } catch (parseError) {
-            logger.warn('Failed to parse AI vocabulary response', { error: parseError });
+          const rawContent = openaiResult.choices?.[0]?.message?.content;
+
+          const extractContentString = (content: unknown): string | null => {
+            if (!content) return null;
+            if (typeof content === 'string') return content;
+            if (Array.isArray(content)) {
+              return content
+                .map(part => {
+                  if (typeof part === 'string') return part;
+                  if (typeof part === 'object' && part && 'text' in part) {
+                    return String((part as { text?: string }).text ?? '');
+                  }
+                  return '';
+                })
+                .join('\n')
+                .trim() || null;
+            }
+            return null;
+          };
+
+          const cleanedContent = extractContentString(rawContent)
+            ?.replace(/```json|```/g, '')
+            .trim();
+
+          if (cleanedContent) {
+            try {
+              extractedVocabulary = JSON.parse(cleanedContent);
+            } catch (parseError) {
+              logger.warn('Failed to parse AI vocabulary response', {
+                error: parseError instanceof Error ? parseError.message : parseError
+              });
+              extractedVocabulary = extractBasicVocabulary(description, difficulty_level, max_words);
+            }
+          } else {
+            logger.warn('OpenAI vocabulary response missing content');
             extractedVocabulary = extractBasicVocabulary(description, difficulty_level, max_words);
           }
         } else {
@@ -868,19 +1048,24 @@ books.post('/extract-vocabulary', jwtMiddleware, async (c) => {
         }
       }
     } catch (error) {
-      logger.warn('Vocabulary extraction error, falling back to basic extraction', { error });
+      logger.warn('Vocabulary extraction error, falling back to basic extraction', {
+        error: error instanceof Error ? error.message : error
+      });
       extractedVocabulary = extractBasicVocabulary(description, difficulty_level, max_words);
     }
 
-    // Store extracted vocabulary in database
-    const vocabularyToStore = [];
+    const vocabularyToStore: Array<Record<string, unknown>> = [];
     for (const vocab of extractedVocabulary) {
+      if (!vocab?.word) {
+        continue;
+      }
+
       try {
-        // Check if word already exists
+        const wordLower = String(vocab.word).toLowerCase();
         const { data: existingWord, error: selectError } = await supabase
           .from('vocabulary_words')
           .select('id')
-          .eq('word', vocab.word.toLowerCase())
+          .eq('word', wordLower)
           .single();
 
         if (selectError && selectError.code !== 'PGRST116') {
@@ -889,14 +1074,18 @@ books.post('/extract-vocabulary', jwtMiddleware, async (c) => {
         }
 
         if (!existingWord) {
-          // Insert new vocabulary word with only existing columns
+          const insertPayload = {
+            word: wordLower,
+            definition: vocab.definition,
+            difficulty_level: vocab.difficulty_level || difficulty_level,
+            part_of_speech: vocab.part_of_speech || 'noun',
+            example_sentence: vocab.example_sentence || `This is an example with ${vocab.word}.`,
+            ...(user?.userId ? { created_by: user.userId } : {})
+          };
+
           const { data: newWord, error: insertError } = await supabase
             .from('vocabulary_words')
-            .insert({
-              word: vocab.word.toLowerCase(),
-              definition: vocab.definition,
-              difficulty_level: vocab.difficulty_level || difficulty_level
-            })
+            .insert(insertPayload)
             .select()
             .single();
 
