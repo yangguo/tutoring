@@ -21,5 +21,6 @@
     }
   },
   "include": ["src", "api"],
+  "exclude": ["api/index.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
