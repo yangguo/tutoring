@@ -1040,7 +1040,7 @@ const ReadingSession: React.FC = () => {
                     <img
                       src={currentPage.image_url}
                       alt={`Page ${currentPage.page_number}`}
-                      className="w-full h-64 object-contain rounded-lg border"
+                      className="w-full h-[75vh] md:h-[85vh] lg:h-[90vh] 2xl:h-[95vh] object-contain rounded-lg border"
                     />
                     
                     {/* Image Controls Overlay */}
