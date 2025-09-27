@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
@@ -20,9 +20,10 @@ import {
   MessageCircle,
   RefreshCw
 } from 'lucide-react';
-import { api, Book, BookPage, DiscussionMessage, API_BASE_URL } from '../lib/api';
+import { api, Book, BookPage, DiscussionMessage, API_BASE_URL, PageGlossaryEntry } from '../lib/api';
 import ChatInterface from '../components/ChatInterface';
 import { convertPdfFileToImages, getPdfPageCount, extractPdfTextPerPage } from '../lib/pdf';
+import { useAuthStore } from '../stores/authStore';
 
 
 
@@ -60,6 +61,26 @@ const ReadingSession: React.FC = () => {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<string | undefined>();
   const descriptionAnnouncementRef = useRef<HTMLDivElement | null>(null);
+  const { user } = useAuthStore();
+  const isParentViewer = user?.role === 'parent' || user?.role === 'admin';
+  const [glossaryEntries, setGlossaryEntries] = useState<PageGlossaryEntry[]>([]);
+  const [glossaryLoading, setGlossaryLoading] = useState(false);
+  const [glossaryGenerating, setGlossaryGenerating] = useState(false);
+  const [glossaryError, setGlossaryError] = useState<string | null>(null);
+  const [showGlossaryOverlay, setShowGlossaryOverlay] = useState(true);
+  const [activeGlossaryEntryId, setActiveGlossaryEntryId] = useState<string | null>(null);
+  const imageWrapperRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const [imageRenderBox, setImageRenderBox] = useState<{ width: number; height: number; offsetX: number; offsetY: number }>({
+    width: 0,
+    height: 0,
+    offsetX: 0,
+    offsetY: 0
+  });
+  const activeGlossaryEntry = useMemo(
+    () => glossaryEntries.find(entry => entry.id === activeGlossaryEntryId) || null,
+    [glossaryEntries, activeGlossaryEntryId]
+  );
 
   useEffect(() => {
     if (bookId) {
@@ -67,6 +88,72 @@ const ReadingSession: React.FC = () => {
       fetchVocabulary();
     }
   }, [bookId]);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const loadGlossary = async () => {
+      if (!currentPage?.id) {
+        setGlossaryEntries([]);
+        setGlossaryError(null);
+        return;
+      }
+
+      setGlossaryLoading(true);
+      setGlossaryError(null);
+      setActiveGlossaryEntryId(null);
+
+      try {
+        const response = await api.getPageGlossary(currentPage.id);
+        if (!isCancelled) {
+          setGlossaryEntries(response.entries || []);
+        }
+      } catch (error) {
+        console.error('Failed to load glossary entries:', error);
+        if (!isCancelled) {
+          const message = error instanceof Error ? error.message : 'Unable to load glossary entries';
+          setGlossaryError(message);
+        }
+      } finally {
+        if (!isCancelled) {
+          setGlossaryLoading(false);
+        }
+      }
+    };
+
+    loadGlossary();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentPage?.id]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!imageWrapperRef.current) return;
+      if (!imageWrapperRef.current.contains(event.target as Node)) {
+        setActiveGlossaryEntryId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActiveGlossaryEntryId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, []);
 
   useEffect(() => {
   const handleVoicesChanged = () => {
@@ -308,6 +395,112 @@ const ReadingSession: React.FC = () => {
     }
   };
 
+  const updateImageRenderBounds = useCallback((img: HTMLImageElement | null) => {
+    if (!img || !imageWrapperRef.current) return;
+
+    const wrapper = imageWrapperRef.current;
+    const naturalWidth = img.naturalWidth || wrapper.clientWidth;
+    const naturalHeight = img.naturalHeight || wrapper.clientHeight;
+
+    if (!naturalWidth || !naturalHeight) return;
+
+    const containerWidth = wrapper.clientWidth;
+    const containerHeight = wrapper.clientHeight;
+
+    if (!containerWidth || !containerHeight) return;
+
+    const scale = Math.min(containerWidth / naturalWidth, containerHeight / naturalHeight);
+    const renderWidth = naturalWidth * scale;
+    const renderHeight = naturalHeight * scale;
+    const offsetX = (containerWidth - renderWidth) / 2;
+    const offsetY = (containerHeight - renderHeight) / 2;
+
+    setImageRenderBox({
+      width: renderWidth,
+      height: renderHeight,
+      offsetX,
+      offsetY
+    });
+  }, []);
+
+  const handleImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    imageRef.current = event.currentTarget;
+    updateImageRenderBounds(event.currentTarget);
+  };
+
+  const handleGlossaryWordClick = (entryId: string) => {
+    setActiveGlossaryEntryId(prev => prev === entryId ? null : entryId);
+  };
+
+  const overlayContainerStyle = useMemo<React.CSSProperties>(() => {
+    if (!imageRenderBox.width || !imageRenderBox.height) {
+      return { display: 'none' };
+    }
+
+    return {
+      top: imageRenderBox.offsetY,
+      left: imageRenderBox.offsetX,
+      width: imageRenderBox.width,
+      height: imageRenderBox.height,
+      pointerEvents: 'none'
+    };
+  }, [imageRenderBox]);
+
+  const glossaryOverlayReady = useMemo(
+    () => showGlossaryOverlay && glossaryEntries.length > 0 && imageRenderBox.width > 0 && imageRenderBox.height > 0,
+    [showGlossaryOverlay, glossaryEntries.length, imageRenderBox.width, imageRenderBox.height]
+  );
+
+  const getPopoverStyle = (entry: PageGlossaryEntry): React.CSSProperties => {
+    const wrapper = imageWrapperRef.current;
+    if (!wrapper) return { display: 'none' };
+
+    const { width, height, offsetX, offsetY } = imageRenderBox;
+    if (!width || !height) return { display: 'none' };
+
+    const anchorX = offsetX + (entry.position.left + entry.position.width) * width;
+    const anchorY = offsetY + entry.position.top * height;
+
+    const wrapperWidth = wrapper.clientWidth;
+    const wrapperHeight = wrapper.clientHeight;
+    const estimatedWidth = 260;
+    const estimatedHeight = 180;
+
+    let left = anchorX + 12;
+    if (left + estimatedWidth > wrapperWidth) {
+      left = Math.max(12, offsetX + entry.position.left * width - estimatedWidth - 12);
+    }
+
+    let top = anchorY;
+    if (top + estimatedHeight > wrapperHeight) {
+      top = wrapperHeight - estimatedHeight - 12;
+    }
+    if (top < 12) {
+      top = 12;
+    }
+
+    return {
+      top,
+      left,
+      maxWidth: Math.min(estimatedWidth, wrapperWidth - 24)
+    };
+  };
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (imageRef.current) {
+        updateImageRenderBounds(imageRef.current);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [currentPage?.image_url, updateImageRenderBounds]);
+
   const analyzeCurrentImage = async () => {
     if (!currentPage?.image_url || analyzingImage) return;
     
@@ -374,6 +567,31 @@ const ReadingSession: React.FC = () => {
       toast.error('Failed to analyze image');
     } finally {
       setAnalyzingImage(false);
+    }
+  };
+
+  const handleGenerateGlossary = async () => {
+    if (!currentPage?.id || glossaryGenerating) return;
+
+    setGlossaryGenerating(true);
+    setGlossaryError(null);
+
+    try {
+      const response = await api.analyzePageGlossary(currentPage.id, { refresh: true });
+      setGlossaryEntries(response.entries || []);
+      setActiveGlossaryEntryId(null);
+      if (response.used_fallback) {
+        toast.warning('Generated glossary using fallback text extraction.');
+      } else {
+        toast.success('Updated glossary highlights for this page!');
+      }
+    } catch (error) {
+      console.error('Failed to generate glossary:', error);
+      const message = error instanceof Error ? error.message : 'Failed to generate glossary';
+      setGlossaryError(message);
+      toast.error(message);
+    } finally {
+      setGlossaryGenerating(false);
     }
   };
 
@@ -1036,15 +1254,111 @@ const ReadingSession: React.FC = () => {
               {/* Page Image */}
               {currentPage?.image_url && (
                 <div className="mb-6">
-                  <div className="relative">
+                  <div
+                    ref={imageWrapperRef}
+                    className="relative rounded-lg border bg-white dark:bg-gray-900"
+                    role="presentation"
+                  >
                     <img
+                      ref={imageRef}
                       src={currentPage.image_url}
                       alt={`Page ${currentPage.page_number}`}
-                      className="w-full h-[75vh] md:h-[85vh] lg:h-[90vh] 2xl:h-[95vh] object-contain rounded-lg border"
+                      className="w-full h-[75vh] md:h-[85vh] lg:h-[90vh] 2xl:h-[95vh] object-contain rounded-lg"
+                      onLoad={handleImageLoad}
                     />
-                    
+
+                    {glossaryOverlayReady && (
+                      <div
+                        className="absolute top-0 left-0 z-20"
+                        style={overlayContainerStyle}
+                        aria-hidden={!showGlossaryOverlay}
+                      >
+                        <div className="relative w-full h-full pointer-events-none">
+                          {glossaryEntries.map((entry) => {
+                            const widthPercent = Math.min(100, Math.max(entry.position?.width ?? 0.08, 0.05) * 100);
+                            const heightPercent = Math.min(100, Math.max(entry.position?.height ?? 0.06, 0.05) * 100);
+                            const topPercent = Math.min(100 - heightPercent, Math.max((entry.position?.top ?? 0) * 100, 0));
+                            const leftPercent = Math.min(100 - widthPercent, Math.max((entry.position?.left ?? 0) * 100, 0));
+
+                            return (
+                              <button
+                                key={entry.id}
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleGlossaryWordClick(entry.id);
+                                }}
+                                className={`absolute flex items-center justify-center rounded-md border text-xs font-semibold uppercase tracking-wide transition-all shadow-sm ${
+                                  activeGlossaryEntryId === entry.id
+                                    ? 'bg-blue-600/60 border-blue-500 text-white scale-105'
+                                    : 'bg-blue-500/20 border-blue-400 text-blue-900 hover:bg-blue-500/30'
+                                }`}
+                                style={{
+                                  top: `${topPercent}%`,
+                                  left: `${leftPercent}%`,
+                                  width: `${widthPercent}%`,
+                                  height: `${heightPercent}%`,
+                                  pointerEvents: 'auto'
+                                }}
+                                aria-label={`Glossary highlight for ${entry.word}`}
+                              >
+                                <span className="px-1 truncate">{entry.word}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {activeGlossaryEntry && glossaryOverlayReady && (
+                      <div
+                        className="absolute z-30 max-w-xs rounded-xl border border-blue-200 bg-white/95 p-4 text-left shadow-xl backdrop-blur-md dark:border-blue-500/40 dark:bg-slate-900/95"
+                        style={{
+                          position: 'absolute',
+                          ...getPopoverStyle(activeGlossaryEntry)
+                        }}
+                        role="dialog"
+                        aria-label={`Glossary details for ${activeGlossaryEntry.word}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h3 className="text-base font-semibold text-blue-700 dark:text-blue-200">
+                              {activeGlossaryEntry.word}
+                            </h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-300">
+                              {activeGlossaryEntry.translation}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setActiveGlossaryEntryId(null)}
+                            className="text-xs text-gray-500 hover:text-gray-700"
+                            aria-label="Close glossary popover"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <p className="mt-3 text-sm text-gray-700 dark:text-gray-200 leading-relaxed">
+                          {activeGlossaryEntry.definition}
+                        </p>
+                        <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-300">
+                          <span className="uppercase tracking-wide">
+                            Difficulty: {activeGlossaryEntry.difficulty}
+                          </span>
+                          <span>
+                            Confidence: {Math.round((activeGlossaryEntry.confidence ?? 0) * 100)}%
+                          </span>
+                        </div>
+                        {activeGlossaryEntry.metadata?.notes && (
+                          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                            {activeGlossaryEntry.metadata.notes}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     {/* Image Controls Overlay */}
-                    <div className="absolute top-2 right-2 flex space-x-2">
+                    <div className="absolute top-2 right-2 flex flex-wrap justify-end gap-2">
                       <button
                         onClick={() => setShowImageDescription(!showImageDescription)}
                         className={`p-2 rounded-full shadow-lg transition-colors ${
@@ -1056,11 +1370,44 @@ const ReadingSession: React.FC = () => {
                       >
                         {showImageDescription ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
-                      
+
+                      {glossaryEntries.length > 0 && (
+                        <button
+                          onClick={() => setShowGlossaryOverlay(prev => !prev)}
+                          className={`p-2 rounded-full shadow-lg transition-colors ${
+                            showGlossaryOverlay
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                          title={showGlossaryOverlay ? 'Hide glossary overlay' : 'Show glossary overlay'}
+                        >
+                          <BookOpen className="h-4 w-4" />
+                        </button>
+                      )}
+
+                      {isParentViewer && (
+                        <button
+                          onClick={handleGenerateGlossary}
+                          disabled={glossaryGenerating}
+                          className={`p-2 rounded-full shadow-lg transition-colors ${
+                            glossaryGenerating
+                              ? 'bg-purple-400 text-white'
+                              : 'bg-purple-500 text-white hover:bg-purple-600'
+                          } disabled:opacity-60`}
+                          title="Generate glossary for this page"
+                        >
+                          {glossaryGenerating ? (
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          ) : (
+                            <RefreshCw className="h-4 w-4" />
+                          )}
+                        </button>
+                      )}
+
                       <button
                         onClick={analyzeCurrentImage}
                         disabled={analyzingImage}
-                        className="p-2 rounded-full bg-purple-500 text-white shadow-lg hover:bg-purple-600 transition-colors disabled:opacity-50"
+                        className="p-2 rounded-full bg-fuchsia-500 text-white shadow-lg hover:bg-fuchsia-600 transition-colors disabled:opacity-50"
                         title="Analyze image with AI"
                       >
                         {analyzingImage ? (
@@ -1069,7 +1416,7 @@ const ReadingSession: React.FC = () => {
                           <Sparkles className="h-4 w-4" />
                         )}
                       </button>
-                      
+
                       {resolvedDescription && (
                         <button
                           onClick={handleDescriptionAudio}
@@ -1084,6 +1431,19 @@ const ReadingSession: React.FC = () => {
                         </button>
                       )}
                     </div>
+
+                    {glossaryLoading && (
+                      <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 text-xs font-medium text-blue-600 shadow-md">
+                        <span className="h-3 w-3 animate-spin rounded-full border border-blue-500 border-t-transparent" />
+                        Loading glossary…
+                      </div>
+                    )}
+
+                    {glossaryError && (
+                      <div className="absolute bottom-3 left-3 max-w-xs rounded-lg bg-red-500/90 px-3 py-2 text-xs text-white shadow-lg">
+                        {glossaryError}
+                      </div>
+                    )}
                   </div>
                   
                   {/* Image Description */}

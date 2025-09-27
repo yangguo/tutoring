@@ -48,6 +48,190 @@ async function getInlineImageUrl(imageUrl: string): Promise<string | null> {
   }
 }
 
+function hasValidOpenAIConfig(): boolean {
+  return Boolean(
+    process.env.OPENAI_BASE_URL &&
+    process.env.OPENAI_API_KEY &&
+    process.env.OPENAI_API_KEY !== 'your-openai-api-key-here' &&
+    (process.env.OPENAI_API_KEY?.length ?? 0) >= 10
+  );
+}
+
+function clamp01(value: unknown, fallback = 0): number {
+  const num = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  if (num < 0) return 0;
+  if (num > 1) return 1;
+  return Number(num.toFixed(4));
+}
+
+type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced' | 'challenging';
+
+function normalizeDifficulty(value: unknown): DifficultyLevel {
+  if (typeof value !== 'string') return 'challenging';
+  const normalized = value.toLowerCase();
+  if (['beginner', 'intermediate', 'advanced', 'challenging'].includes(normalized)) {
+    return normalized as DifficultyLevel;
+  }
+  if (['easy'].includes(normalized)) return 'beginner';
+  if (['medium', 'moderate'].includes(normalized)) return 'intermediate';
+  if (['hard', 'difficult'].includes(normalized)) return 'advanced';
+  return 'challenging';
+}
+
+interface FallbackGlossaryEntry {
+  word: string;
+  definition: string;
+  translation: string;
+  difficulty: DifficultyLevel;
+  confidence: number;
+  position: { top: number; left: number; width: number; height: number };
+  metadata?: Record<string, unknown>;
+}
+
+function createFallbackPosition(index: number, total: number) {
+  if (total <= 0) {
+    return { top: 0.1, left: 0.1, width: 0.2, height: 0.1 };
+  }
+
+  const columns = Math.ceil(Math.sqrt(total));
+  const rows = Math.ceil(total / columns);
+  const row = Math.floor(index / columns);
+  const column = index % columns;
+
+  const width = 0.18;
+  const height = 0.1;
+
+  const horizontalGap = columns > 1 ? (1 - width) / (columns - 1 || 1) : 0;
+  const verticalGap = rows > 1 ? (1 - height) / (rows - 1 || 1) : 0;
+
+  const left = clamp01(column * horizontalGap);
+  const top = clamp01(row * verticalGap + 0.05);
+
+  return { top, left, width, height };
+}
+
+function generateFallbackGlossaryFromText(text: string | null | undefined, maxEntries = 6): FallbackGlossaryEntry[] {
+  if (!text) return [];
+
+  const sanitized = text.toLowerCase().replace(/[^a-z\s-]/g, ' ');
+  const words = sanitized.split(/\s+/).filter(Boolean);
+  const seen = new Set<string>();
+  const stopWords = new Set([
+    'the', 'and', 'with', 'from', 'they', 'have', 'this', 'that', 'were', 'said',
+    'each', 'which', 'their', 'time', 'will', 'about', 'would', 'there', 'could',
+    'other', 'more', 'very', 'what', 'know', 'just', 'into', 'over', 'also', 'your',
+    'work', 'life', 'only', 'still', 'should', 'after', 'being', 'before', 'through',
+    'when', 'where', 'some', 'then', 'them', 'well', 'once'
+  ]);
+
+  const candidates: string[] = [];
+  for (const word of words) {
+    if (word.length < 5) continue;
+    if (stopWords.has(word)) continue;
+    if (seen.has(word)) continue;
+    seen.add(word);
+    candidates.push(word);
+    if (candidates.length >= maxEntries) break;
+  }
+
+  return candidates.map((word, index) => ({
+    word,
+    definition: `Definition for "${word}" is not available in offline mode.`,
+    translation: `${word}（待翻译）`,
+    difficulty: word.length > 8 ? 'advanced' : 'challenging',
+    confidence: 0.35,
+    position: createFallbackPosition(index, candidates.length),
+    metadata: { source: 'fallback-text', note: 'Generated without AI vision OCR' }
+  }));
+}
+
+function normalizeBoundingValue(value: unknown, fallback: number, scale?: number): number {
+  const numeric = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  // Many models emit percentages (0-100). Convert anything clearly above 1.
+  if (scale && scale > 1.2) {
+    return clamp01(numeric / scale, fallback);
+  }
+
+  const scaled = numeric > 1.2 ? numeric / 100 : numeric;
+  return clamp01(scaled, fallback);
+}
+
+function attemptRepairJsonResponse(rawContent: string): string | null {
+  if (!rawContent) return null;
+
+  let candidate = rawContent.replace(/```json|```/g, '').trim();
+  if (!candidate) return null;
+
+  // If there's trailing partially-written text after the last closing brace, trim it off.
+  const lastClosingBrace = candidate.lastIndexOf('}');
+  if (lastClosingBrace !== -1 && lastClosingBrace < candidate.length - 1) {
+    candidate = candidate.slice(0, lastClosingBrace + 1);
+  }
+
+  candidate = candidate.replace(/\s+$/, '');
+
+  const countChar = (text: string, char: string) => (text.match(new RegExp(char, 'g')) ?? []).length;
+
+  let openSquares = countChar(candidate, '\\[');
+  let closeSquares = countChar(candidate, '\\]');
+  while (closeSquares < openSquares) {
+    candidate += ']';
+    closeSquares += 1;
+  }
+
+  let openCurlies = countChar(candidate, '{');
+  let closeCurlies = countChar(candidate, '}');
+  while (closeCurlies < openCurlies) {
+    candidate += '}';
+    closeCurlies += 1;
+  }
+
+  try {
+    JSON.parse(candidate);
+    return candidate;
+  } catch (repairError) {
+    console.error('Failed to repair AI JSON response:', repairError);
+    return null;
+  }
+}
+
+function deriveBoundingScale(entries: Array<{ bounding_box?: { top?: number; left?: number; width?: number; height?: number } }>) {
+  let maxRight = 0;
+  let maxBottom = 0;
+  let maxWidth = 0;
+  let maxHeight = 0;
+
+  for (const entry of entries) {
+    const box = entry.bounding_box;
+    if (!box) continue;
+    const left = typeof box.left === 'number' ? box.left : Number.parseFloat(String(box.left ?? ''));
+    const width = typeof box.width === 'number' ? box.width : Number.parseFloat(String(box.width ?? ''));
+    const top = typeof box.top === 'number' ? box.top : Number.parseFloat(String(box.top ?? ''));
+    const height = typeof box.height === 'number' ? box.height : Number.parseFloat(String(box.height ?? ''));
+
+    if (Number.isFinite(left) && Number.isFinite(width)) {
+      maxRight = Math.max(maxRight, left + width, left, width);
+      maxWidth = Math.max(maxWidth, width);
+    }
+    if (Number.isFinite(top) && Number.isFinite(height)) {
+      maxBottom = Math.max(maxBottom, top + height, top, height);
+      maxHeight = Math.max(maxHeight, height);
+    }
+  }
+
+  const scaleX = maxRight > 1.2 ? maxRight : 1;
+  const scaleY = maxBottom > 1.2 ? maxBottom : 1;
+
+  return { scaleX, scaleY, maxWidth, maxHeight };
+}
+
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // Achievements Routes
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -1311,14 +1495,9 @@ router.post('/books/analyze-image', authenticateToken, async (req: Request, res:
       }
     };
 
-    const hasValidOpenAIConfig = Boolean(
-      process.env.OPENAI_BASE_URL &&
-      process.env.OPENAI_API_KEY &&
-      process.env.OPENAI_API_KEY !== 'your-openai-api-key-here' &&
-      (process.env.OPENAI_API_KEY?.length ?? 0) >= 10
-    );
+    const openAiAvailable = hasValidOpenAIConfig();
 
-    if (!hasValidOpenAIConfig) {
+    if (!openAiAvailable) {
       ensureFallback('OpenAI configuration missing or invalid, using basic image description.');
     } else {
       try {
@@ -1471,6 +1650,339 @@ router.post('/books/analyze-image', authenticateToken, async (req: Request, res:
     res.json({ description: basicDescription, vocabulary: [] });
   }
 });
+
+router.get('/books/pages/:pageId/glossary', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { pageId } = req.params;
+
+    const { data, error } = await supabase
+      .from('page_glossary_entries')
+      .select('*')
+      .eq('page_id', pageId)
+      .order('confidence', { ascending: false })
+      .order('word', { ascending: true });
+
+    if (error) {
+      console.error('Failed to fetch page glossary entries:', error);
+      res.status(500).json({ error: 'Failed to fetch glossary entries' });
+      return;
+    }
+
+    res.json({ entries: data ?? [] });
+  } catch (error) {
+    console.error('Unexpected glossary fetch error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post(
+  '/books/pages/:pageId/glossary/analyze',
+  authenticateToken,
+  requireRole(['parent', 'admin']),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { pageId } = req.params;
+      const { max_entries = 6, refresh = true } = req.body ?? {};
+      const requester = (req as any).user as { userId: string; role: string } | undefined;
+
+      if (!requester || !requester.userId) {
+        res.status(401).json({ error: 'Authentication required' });
+        return;
+      }
+
+      const { data: page, error: pageError } = await supabase
+        .from('book_pages')
+        .select('id, book_id, page_number, image_url, text_content')
+        .eq('id', pageId)
+        .single();
+
+      if (pageError || !page) {
+        res.status(404).json({ error: 'Book page not found' });
+        return;
+      }
+
+      if (!page.image_url) {
+        res.status(400).json({ error: 'Page is missing an image to analyze' });
+        return;
+      }
+
+      const { data: book, error: bookError } = await supabase
+        .from('books')
+        .select('id, title, difficulty_level, target_age_min, target_age_max')
+        .eq('id', page.book_id)
+        .single();
+
+      if (bookError || !book) {
+        res.status(404).json({ error: 'Book not found for the requested page' });
+        return;
+      }
+
+      const openAiAvailable = hasValidOpenAIConfig();
+      const inlineImageUrl = openAiAvailable ? await getInlineImageUrl(page.image_url) : null;
+      const imageSource = inlineImageUrl ?? page.image_url;
+
+      interface AiGlossaryEntry {
+        word: string;
+        definition: string;
+        translation: string;
+        difficulty?: string;
+        confidence?: number;
+        bounding_box?: { top?: number; left?: number; width?: number; height?: number };
+        notes?: string;
+      }
+
+      let aiEntries: AiGlossaryEntry[] = [];
+      const metadata: Record<string, unknown> = {
+        book_title: book.title,
+        page_number: page.page_number,
+        inline_image_used: Boolean(inlineImageUrl)
+      };
+
+      if (openAiAvailable) {
+        const controller = new AbortController();
+        const timeoutRaw = process.env.OPENAI_VISION_TIMEOUT_MS;
+        const glossaryTimeoutRaw = process.env.OPENAI_GLOSSARY_TIMEOUT_MS;
+        const parsedTimeout = timeoutRaw ? Number.parseInt(timeoutRaw, 10) : Number.NaN;
+        const parsedGlossaryTimeout = glossaryTimeoutRaw ? Number.parseInt(glossaryTimeoutRaw, 10) : Number.NaN;
+        // Use a longer timeout for glossary analysis as it's more complex than other vision tasks
+        const baseTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
+        const glossaryTimeoutMs = Number.isFinite(parsedGlossaryTimeout) && parsedGlossaryTimeout > 0 ? parsedGlossaryTimeout : 300_000;
+        const timeoutMs = Math.max(baseTimeoutMs, glossaryTimeoutMs); // Configurable minimum for glossary analysis
+
+        const visionModel = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
+
+        const promptInstruction = `You are assisting a parent who supports an English learner at the primary school level. ` +
+          `Analyze the provided book page image and identify up to ${max_entries} English words or short phrases that a primary school student might find challenging. ` +
+          `You must respond with a single JSON object matching this schema: { "entries": [ { "word": string, ` +
+          `"definition": string, "translation": string, "difficulty": "beginner" | "intermediate" | "advanced" | "challenging", ` +
+          `"confidence": number between 0 and 1, "bounding_box": { "top": number, "left": number, "width": number, "height": number }, "notes"?: string } ] }. ` +
+          `All floating point numbers must use a dot decimal (.) and at most three decimals. Do not include any explanatory text before or after the JSON.`;
+
+        const messages = [
+          {
+            role: 'system',
+            content: 'You are an expert children\'s reading coach and bilingual assistant.'
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: promptInstruction },
+              {
+                type: 'text',
+                text: `Book: ${book.title}. Difficulty: ${book.difficulty_level}. Target age: ${book.target_age_min}-${book.target_age_max}. Page: ${page.page_number}.`
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: imageSource,
+                  detail: inlineImageUrl ? undefined : 'high'
+                }
+              }
+            ]
+          }
+        ];
+
+        const startTime = Date.now();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+        }, timeoutMs);
+
+        try {
+          const response = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: visionModel,
+              messages,
+              max_tokens: 700,
+              temperature: 0.2,
+              response_format: {
+                type: 'json_object'
+              }
+            }),
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+          const elapsed = Date.now() - startTime;
+          console.log(`Glossary analysis call completed in ${elapsed}ms`);
+
+          if (!response.ok) {
+            console.error('OpenAI glossary analysis error:', await response.text());
+            metadata.api_error = true;
+          } else {
+            const result = await response.json();
+            const message = result.choices?.[0]?.message ?? null;
+            let structuredPayload: unknown = null;
+
+            if (message && message.content) {
+              console.log('Raw AI response content length:', message.content.length);
+              console.log('Raw AI response content preview:', message.content.substring(0, 200));
+              
+              // Check if the response seems complete (should end with proper JSON structure)
+              const content = message.content.trim();
+              if (!content.endsWith('}') && !content.endsWith(']}')) {
+                console.log('Response appears to be incomplete - missing closing braces');
+                metadata.incomplete_response = true;
+              }
+              
+              try {
+                structuredPayload = JSON.parse(message.content);
+              } catch (parseError) {
+                console.error('Unable to parse glossary AI response:', parseError);
+                console.log('Failed content:', message.content);
+                metadata.json_parse_error = true;
+                
+                // Attempt to clean up the string if parsing fails
+                const cleanedContent = message.content.replace(/```json|```/g, '').trim();
+                console.log('Cleaned content preview:', cleanedContent.substring(0, 200));
+                
+              try {
+                  structuredPayload = JSON.parse(cleanedContent);
+                  console.log('Successfully parsed cleaned content');
+              } catch (finalParseError) {
+                  console.error('Unable to parse cleaned glossary AI response:', finalParseError);
+                  console.log('Final failed content:', cleanedContent);
+                  metadata.final_parse_error = true;
+
+                  const repaired = attemptRepairJsonResponse(cleanedContent);
+                  if (repaired) {
+                    try {
+                      structuredPayload = JSON.parse(repaired);
+                      metadata.repaired_response = true;
+                      console.log('Successfully repaired and parsed AI response');
+                    } catch (repairParseError) {
+                      console.error('Repaired AI response still failed to parse:', repairParseError);
+                    }
+                  }
+                }
+              }
+          } else {
+            console.log('No message content received from AI response');
+            console.log('Full result:', JSON.stringify(result, null, 2));
+            metadata.no_content = true;
+          }
+
+            const maybeEntries = structuredPayload && Array.isArray((structuredPayload as any).entries)
+              ? (structuredPayload as any).entries
+              : Array.isArray(structuredPayload)
+                ? structuredPayload
+                : [];
+
+            if (Array.isArray(maybeEntries) && maybeEntries.length > 0) {
+              aiEntries = maybeEntries
+                .map((entry: any) => ({
+                  word: typeof entry?.word === 'string' ? entry.word.trim() : '',
+                  definition: typeof entry?.definition === 'string' ? entry.definition.trim() : '',
+                  translation: typeof entry?.translation === 'string' ? entry.translation.trim() : '',
+                  difficulty: entry?.difficulty,
+                  confidence: entry?.confidence,
+                  bounding_box: entry?.bounding_box,
+                  notes: typeof entry?.notes === 'string' ? entry.notes : undefined
+                }))
+                .filter(entry => entry.word && entry.definition && entry.translation);
+            }
+          }
+        } catch (error) {
+          clearTimeout(timeoutId);
+          console.error('Glossary analysis request failed:', error);
+          
+          // Check if the error was due to timeout/abort
+          if (error instanceof Error && error.name === 'AbortError') {
+            console.log('Request was aborted due to timeout');
+            metadata.timeout_occurred = true;
+          } else {
+            console.log('Request failed with error:', error);
+            metadata.request_error = error instanceof Error ? error.message : String(error);
+          }
+        }
+      }
+
+      if (!aiEntries.length) {
+        aiEntries = generateFallbackGlossaryFromText(page.text_content, max_entries);
+        metadata.fallback_used = true;
+      }
+
+      if (!aiEntries.length) {
+        res.status(200).json({ message: 'No glossary entries identified', entries: [] });
+        return;
+      }
+
+      if (refresh) {
+        const { error: deleteError } = await supabase
+          .from('page_glossary_entries')
+          .delete()
+          .eq('page_id', pageId);
+
+        if (deleteError) {
+          console.error('Failed to clear previous glossary entries:', deleteError);
+        }
+      }
+
+      const { scaleX, scaleY, maxWidth, maxHeight } = deriveBoundingScale(aiEntries);
+      if (scaleX > 1.2 || scaleY > 1.2) {
+        metadata.bounding_scale = { scaleX, scaleY, maxWidth, maxHeight };
+      }
+
+      const mappedEntries = aiEntries.slice(0, max_entries).map((entry, index) => {
+        const fallbackPosition = createFallbackPosition(index, aiEntries.length);
+
+        const top = entry.bounding_box?.top;
+        const left = entry.bounding_box?.left;
+        const width = entry.bounding_box?.width;
+        const height = entry.bounding_box?.height;
+
+        const normalizedPosition = entry.bounding_box ? {
+          top: normalizeBoundingValue(top, fallbackPosition.top, scaleY),
+          left: normalizeBoundingValue(left, fallbackPosition.left, scaleX),
+          width: Math.max(normalizeBoundingValue(width, 0.18, scaleX), 0.04),
+          height: Math.max(normalizeBoundingValue(height, 0.1, scaleY), 0.04)
+        } : fallbackPosition;
+
+        return {
+          page_id: pageId,
+          word: entry.word,
+          definition: entry.definition,
+          translation: entry.translation,
+          difficulty: normalizeDifficulty(entry.difficulty),
+          confidence: clamp01(entry.confidence, 0.6),
+          position: normalizedPosition,
+          metadata: {
+            ...metadata,
+            notes: entry.notes,
+            source: openAiAvailable ? 'openai-vision' : 'fallback-text',
+            raw_bounding_box: entry.bounding_box ?? null
+          },
+          created_by: requester.userId
+        };
+      });
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('page_glossary_entries')
+        .insert(mappedEntries)
+        .select('*');
+
+      if (insertError) {
+        console.error('Failed to store glossary entries:', insertError);
+        res.status(500).json({ error: 'Failed to store glossary entries' });
+        return;
+      }
+
+      res.json({
+        message: 'Glossary generated successfully',
+        entries: inserted,
+        used_fallback: metadata.fallback_used === true,
+        total: inserted?.length ?? 0
+      });
+    } catch (error) {
+      console.error('Unexpected glossary analysis error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 router.post('/books/:bookId/analyze-images', authenticateToken, requireRole(['admin']), async (req: Request, res: Response): Promise<void> => {
   try {

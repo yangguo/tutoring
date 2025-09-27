@@ -859,19 +859,19 @@ router.post('/books/reading-session', authenticateToken, async (req: Request, re
       .single();
 
     if (sessionError) {
-      res.status(500).json({ error: 'Failed to create speaking session' });
+      res.status(500).json({ error: 'Failed to create reading session' });
       return;
     }
 
     res.status(201).json({
-      message: 'Speaking session created successfully',
+      message: 'Reading session created successfully',
       session: {
         id: sessionData.id,
         book_id: sessionData.book_id,
-        page_number: sessionData.page_number,
-        pronunciation_score: sessionData.pronunciation_score,
-        fluency_score: sessionData.fluency_score,
-        accuracy_score: sessionData.accuracy_score,
+        pages_read: sessionData.pages_read,
+        time_spent: sessionData.time_spent,
+        comprehension_score: sessionData.comprehension_score,
+        vocabulary_learned: sessionData.vocabulary_learned,
         created_at: sessionData.created_at
       }
     });
