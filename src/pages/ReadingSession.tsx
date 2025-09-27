@@ -24,6 +24,7 @@ import { api, Book, BookPage, DiscussionMessage, API_BASE_URL, PageGlossaryEntry
 import ChatInterface from '../components/ChatInterface';
 import { convertPdfFileToImages, getPdfPageCount, extractPdfTextPerPage } from '../lib/pdf';
 import { useAuthStore } from '../stores/authStore';
+import { cleanTextForTTS } from '../lib/utils';
 
 
 
@@ -731,7 +732,15 @@ const ReadingSession: React.FC = () => {
     if ('speechSynthesis' in window) {
       stopSpeaking();
 
-      const utterance = new SpeechSynthesisUtterance(description);
+      // Clean the description text for better TTS reading
+      const cleanedDescription = cleanTextForTTS(description);
+      
+      if (!cleanedDescription.trim()) {
+        console.warn('No text to speak after cleaning');
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(cleanedDescription);
       if (selectedVoice) {
         const voice = voices.find(v => v.voiceURI === selectedVoice);
         if (voice) {
@@ -746,7 +755,7 @@ const ReadingSession: React.FC = () => {
       announcement.setAttribute('aria-live', 'polite');
       announcement.setAttribute('aria-atomic', 'true');
       announcement.className = 'sr-only';
-      announcement.textContent = `Reading image description: ${description}`;
+      announcement.textContent = `Reading image description: ${cleanedDescription}`;
       document.body.appendChild(announcement);
       descriptionAnnouncementRef.current = announcement;
 
