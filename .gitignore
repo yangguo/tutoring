@@ -190,3 +190,5 @@ out/
   
 # Cloudflare Wrangler cache and temp files
 api-cloudflare/.wrangler/
+# Local Netlify folder
+.netlify
