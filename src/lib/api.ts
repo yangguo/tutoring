@@ -2,7 +2,7 @@
  * API utilities for the Interactive English Tutor frontend
  */
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : '');
+export const API_BASE_URL = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : '');
 
 export interface User {
   id: string;
@@ -29,6 +29,7 @@ export interface Book {
   is_public: boolean;
   uploaded_by: string;
   created_at: string;
+  pdf_file_url?: string;
   pages?: BookPage[];
 }
 
@@ -40,6 +41,27 @@ export interface BookPage {
   text_content?: string;
   audio_url?: string;
   image_description?: string;
+  created_at: string;
+}
+
+export interface GlossaryPosition {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+export interface PageGlossaryEntry {
+  id: string;
+  page_id: string;
+  word: string;
+  definition: string;
+  translation: string;
+  difficulty: 'beginner' | 'intermediate' | 'advanced' | 'challenging';
+  confidence: number;
+  position: GlossaryPosition;
+  metadata?: Record<string, any> | null;
+  created_by?: string | null;
   created_at: string;
 }
 
@@ -118,7 +140,7 @@ class ApiClient {
     }
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  private async request<T>(endpoint: string, options: RequestInit = {}, timeoutMs = 10000): Promise<T> {
     const url = `${this.baseURL}${endpoint}`;
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -131,7 +153,7 @@ class ApiClient {
 
     // Add timeout to prevent hanging
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(url, {
@@ -349,7 +371,7 @@ class ApiClient {
   }
 
   async deleteBook(bookId: string) {
-    return this.request(`/api/upload/book/${bookId}`, { method: 'DELETE' });
+    return this.request(`/api/library/${bookId}`, { method: 'DELETE' });
   }
 
   async updateBook(bookId: string, updates: Partial<{
@@ -370,24 +392,51 @@ class ApiClient {
 
   // AI-powered Image Understanding
   async analyzeImage(imageUrl: string, pageId?: string, context?: string) {
-    return this.request<{ description: string; vocabulary: VocabularyWord[]; updated_page?: boolean }>('/api/books/analyze-image', {
-      method: 'POST',
-      body: JSON.stringify({ image_url: imageUrl, page_id: pageId, context }),
-    });
+    return this.request<{ description: string; vocabulary: VocabularyWord[]; updated_page?: boolean }>(
+      '/api/books/analyze-image',
+      {
+        method: 'POST',
+        body: JSON.stringify({ image_url: imageUrl, page_id: pageId, context }),
+      },
+      60000
+    );
   }
 
   async extractVocabulary(description: string, difficultyLevel = 'beginner', maxWords = 5) {
-    return this.request<{ message: string; vocabulary: VocabularyWord[]; stored_count: number }>('/api/books/extract-vocabulary', {
-      method: 'POST',
-      body: JSON.stringify({ description, difficulty_level: difficultyLevel, max_words: maxWords }),
-    });
+    return this.request<{ message: string; vocabulary: VocabularyWord[]; stored_count: number }>(
+      '/api/books/extract-vocabulary',
+      {
+        method: 'POST',
+        body: JSON.stringify({ description, difficulty_level: difficultyLevel, max_words: maxWords }),
+      },
+      30000
+    );
   }
 
   async batchAnalyzeImages(bookId: string, forceReanalyze = false) {
-    return this.request<{ message: string; processed: number; skipped: number; errors: number; results: any[] }>(`/api/books/${bookId}/analyze-images`, {
-      method: 'POST',
-      body: JSON.stringify({ force_reanalyze: forceReanalyze }),
-    });
+    return this.request<{ message: string; processed: number; skipped: number; errors: number; results: any[] }>(
+      `/api/books/${bookId}/analyze-images`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ force_reanalyze: forceReanalyze }),
+      },
+      120000
+    );
+  }
+
+  async getPageGlossary(pageId: string) {
+    return this.request<{ entries: PageGlossaryEntry[] }>(`/api/books/pages/${pageId}/glossary`);
+  }
+
+  async analyzePageGlossary(pageId: string, options: { max_entries?: number; refresh?: boolean } = {}) {
+    return this.request<{ message: string; entries: PageGlossaryEntry[]; used_fallback?: boolean; total: number }>(
+      `/api/books/pages/${pageId}/glossary/analyze`,
+      {
+        method: 'POST',
+        body: JSON.stringify(options),
+      },
+      240000
+    );
   }
 
   // Book Discussions

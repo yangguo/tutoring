@@ -143,3 +143,24 @@ export interface UserProgress {
   total_points: number;
   created_at: string;
 }
+
+export interface GlossaryPosition {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+export interface PageGlossaryEntry {
+  id: string;
+  page_id: string;
+  word: string;
+  definition: string;
+  translation?: string;
+  difficulty: 'beginner' | 'intermediate' | 'advanced' | 'challenging';
+  confidence: number;
+  position: GlossaryPosition;
+  metadata: Record<string, any> | null;
+  created_by?: string | null;
+  created_at: string;
+}

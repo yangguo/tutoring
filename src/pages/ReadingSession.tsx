@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import ReactMarkdown from 'react-markdown';
@@ -15,13 +15,16 @@ import {
   EyeOff,
   Sparkles,
   Volume1,
+  VolumeX,
   Contrast,
   MessageCircle,
   RefreshCw
 } from 'lucide-react';
-import { api, Book, BookPage, DiscussionMessage } from '../lib/api';
+import { api, Book, BookPage, DiscussionMessage, API_BASE_URL, PageGlossaryEntry } from '../lib/api';
 import ChatInterface from '../components/ChatInterface';
-import { convertPdfFileToImages } from '../lib/pdf';
+import { convertPdfFileToImages, getPdfPageCount, extractPdfTextPerPage } from '../lib/pdf';
+import { useAuthStore } from '../stores/authStore';
+import { cleanTextForTTS } from '../lib/utils';
 
 
 
@@ -50,11 +53,35 @@ const ReadingSession: React.FC = () => {
   const [highContrastMode, setHighContrastMode] = useState(false);
   const [autoReadDescriptions, setAutoReadDescriptions] = useState(false);
   const [showDiscussion, setShowDiscussion] = useState(false);
+  const [isReadingDescription, setIsReadingDescription] = useState(false);
+  const [regeneratingAll, setRegeneratingAll] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [convertingPdf, setConvertingPdf] = useState(false);
   const [conversionMessage, setConversionMessage] = useState<string | null>(null);
+  const [totalPages, setTotalPages] = useState<number>(0);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selectedVoice, setSelectedVoice] = useState<string | undefined>();
+  const descriptionAnnouncementRef = useRef<HTMLDivElement | null>(null);
+  const { user } = useAuthStore();
+  const isParentViewer = user?.role === 'parent' || user?.role === 'admin';
+  const [glossaryEntries, setGlossaryEntries] = useState<PageGlossaryEntry[]>([]);
+  const [glossaryLoading, setGlossaryLoading] = useState(false);
+  const [glossaryGenerating, setGlossaryGenerating] = useState(false);
+  const [glossaryError, setGlossaryError] = useState<string | null>(null);
+  const [showGlossaryOverlay, setShowGlossaryOverlay] = useState(true);
+  const [activeGlossaryEntryId, setActiveGlossaryEntryId] = useState<string | null>(null);
+  const imageWrapperRef = useRef<HTMLDivElement | null>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+  const [imageRenderBox, setImageRenderBox] = useState<{ width: number; height: number; offsetX: number; offsetY: number }>({
+    width: 0,
+    height: 0,
+    offsetX: 0,
+    offsetY: 0
+  });
+  const activeGlossaryEntry = useMemo(
+    () => glossaryEntries.find(entry => entry.id === activeGlossaryEntryId) || null,
+    [glossaryEntries, activeGlossaryEntryId]
+  );
 
   useEffect(() => {
     if (bookId) {
@@ -64,9 +91,75 @@ const ReadingSession: React.FC = () => {
   }, [bookId]);
 
   useEffect(() => {
-    const handleVoicesChanged = () => {
-      setVoices(speechSynthesis.getVoices());
+    let isCancelled = false;
+
+    const loadGlossary = async () => {
+      if (!currentPage?.id) {
+        setGlossaryEntries([]);
+        setGlossaryError(null);
+        return;
+      }
+
+      setGlossaryLoading(true);
+      setGlossaryError(null);
+      setActiveGlossaryEntryId(null);
+
+      try {
+        const response = await api.getPageGlossary(currentPage.id);
+        if (!isCancelled) {
+          setGlossaryEntries(response.entries || []);
+        }
+      } catch (error) {
+        console.error('Failed to load glossary entries:', error);
+        if (!isCancelled) {
+          const message = error instanceof Error ? error.message : 'Unable to load glossary entries';
+          setGlossaryError(message);
+        }
+      } finally {
+        if (!isCancelled) {
+          setGlossaryLoading(false);
+        }
+      }
     };
+
+    loadGlossary();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [currentPage?.id]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (!imageWrapperRef.current) return;
+      if (!imageWrapperRef.current.contains(event.target as Node)) {
+        setActiveGlossaryEntryId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActiveGlossaryEntryId(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleEscape);
+    return () => {
+      window.removeEventListener('keydown', handleEscape);
+    };
+  }, []);
+
+  useEffect(() => {
+  const handleVoicesChanged = () => {
+    setVoices(speechSynthesis.getVoices().filter(voice => voice.lang.startsWith('en')));
+  };
     speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
     handleVoicesChanged(); // Initial load
     return () => speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
@@ -78,6 +171,29 @@ const ReadingSession: React.FC = () => {
       loadDiscussionHistory();
     }
   }, [book?.id]);
+
+  // Compute total pages from PDF to enable resume functionality
+  useEffect(() => {
+    const computeTotalPages = async () => {
+      if (!book?.pdf_file_url) return;
+
+      try {
+        const response = await fetch(book.pdf_file_url, { credentials: 'omit' });
+        if (!response.ok) {
+          console.warn('Failed to download PDF for page count');
+          return;
+        }
+        const pdfBlob = await response.blob();
+        const pdfFile = new File([pdfBlob], 'temp.pdf', { type: 'application/pdf' });
+        const total = await getPdfPageCount(pdfFile);
+        setTotalPages(total);
+      } catch (err) {
+        console.error('Failed to compute total pages:', err);
+      }
+    };
+
+    computeTotalPages();
+  }, [book?.pdf_file_url]);
 
   const loadDiscussionHistory = async () => {
     if (!book?.id) return;
@@ -280,18 +396,128 @@ const ReadingSession: React.FC = () => {
     }
   };
 
+  const updateImageRenderBounds = useCallback((img: HTMLImageElement | null) => {
+    if (!img || !imageWrapperRef.current) return;
+
+    const wrapper = imageWrapperRef.current;
+    const naturalWidth = img.naturalWidth || wrapper.clientWidth;
+    const naturalHeight = img.naturalHeight || wrapper.clientHeight;
+
+    if (!naturalWidth || !naturalHeight) return;
+
+    const containerWidth = wrapper.clientWidth;
+    const containerHeight = wrapper.clientHeight;
+
+    if (!containerWidth || !containerHeight) return;
+
+    const scale = Math.min(containerWidth / naturalWidth, containerHeight / naturalHeight);
+    const renderWidth = naturalWidth * scale;
+    const renderHeight = naturalHeight * scale;
+    const offsetX = (containerWidth - renderWidth) / 2;
+    const offsetY = (containerHeight - renderHeight) / 2;
+
+    setImageRenderBox({
+      width: renderWidth,
+      height: renderHeight,
+      offsetX,
+      offsetY
+    });
+  }, []);
+
+  const handleImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    imageRef.current = event.currentTarget;
+    updateImageRenderBounds(event.currentTarget);
+  };
+
+  const handleGlossaryWordClick = (entryId: string) => {
+    setActiveGlossaryEntryId(prev => prev === entryId ? null : entryId);
+  };
+
+  const overlayContainerStyle = useMemo<React.CSSProperties>(() => {
+    if (!imageRenderBox.width || !imageRenderBox.height) {
+      return { display: 'none' };
+    }
+
+    return {
+      top: imageRenderBox.offsetY,
+      left: imageRenderBox.offsetX,
+      width: imageRenderBox.width,
+      height: imageRenderBox.height,
+      pointerEvents: 'none'
+    };
+  }, [imageRenderBox]);
+
+  const glossaryOverlayReady = useMemo(
+    () => showGlossaryOverlay && glossaryEntries.length > 0 && imageRenderBox.width > 0 && imageRenderBox.height > 0,
+    [showGlossaryOverlay, glossaryEntries.length, imageRenderBox.width, imageRenderBox.height]
+  );
+
+  const getPopoverStyle = (entry: PageGlossaryEntry): React.CSSProperties => {
+    const wrapper = imageWrapperRef.current;
+    if (!wrapper) return { display: 'none' };
+
+    const { width, height, offsetX, offsetY } = imageRenderBox;
+    if (!width || !height) return { display: 'none' };
+
+    const anchorX = offsetX + (entry.position.left + entry.position.width) * width;
+    const anchorY = offsetY + entry.position.top * height;
+
+    const wrapperWidth = wrapper.clientWidth;
+    const wrapperHeight = wrapper.clientHeight;
+    const estimatedWidth = 260;
+    const estimatedHeight = 180;
+
+    let left = anchorX + 12;
+    if (left + estimatedWidth > wrapperWidth) {
+      left = Math.max(12, offsetX + entry.position.left * width - estimatedWidth - 12);
+    }
+
+    let top = anchorY;
+    if (top + estimatedHeight > wrapperHeight) {
+      top = wrapperHeight - estimatedHeight - 12;
+    }
+    if (top < 12) {
+      top = 12;
+    }
+
+    return {
+      top,
+      left,
+      maxWidth: Math.min(estimatedWidth, wrapperWidth - 24)
+    };
+  };
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (imageRef.current) {
+        updateImageRenderBounds(imageRef.current);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [currentPage?.image_url, updateImageRenderBounds]);
+
   const analyzeCurrentImage = async () => {
     if (!currentPage?.image_url || analyzingImage) return;
     
     setAnalyzingImage(true);
     try {
-      const response = await fetch('/api/books/analyze-image', {
+      const response = await fetch(buildApiUrl('/api/books/analyze-image'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
         },
-        body: JSON.stringify({ image_url: currentPage.image_url })
+        body: JSON.stringify({
+          image_url: currentPage.image_url,
+          page_id: currentPage.id,
+          context: book ? `${book.title} by ${book.author}` : undefined
+        })
       });
       
       const data = await response.json();
@@ -300,7 +526,21 @@ const ReadingSession: React.FC = () => {
           ...prev,
           [currentPage.id]: data.description
         }));
-        
+
+        setShowImageDescription(true);
+
+        setPages(prevPages => {
+          const newPages = [...prevPages];
+          const pageIndex = newPages.findIndex(p => p.id === currentPage.id);
+          if (pageIndex !== -1) {
+            newPages[pageIndex] = {
+              ...newPages[pageIndex],
+              image_description: data.description
+            };
+          }
+          return newPages;
+        });
+
         // Extract vocabulary from the description if available
         if (data.description && data.description.length > 50) {
           try {
@@ -320,7 +560,7 @@ const ReadingSession: React.FC = () => {
             // Don't show error for vocabulary extraction as it's secondary
           }
         }
-        
+
         toast.success('Image analyzed successfully!');
       }
     } catch (error) {
@@ -331,16 +571,55 @@ const ReadingSession: React.FC = () => {
     }
   };
 
+  const handleGenerateGlossary = async () => {
+    if (!currentPage?.id || glossaryGenerating) return;
+
+    setGlossaryGenerating(true);
+    setGlossaryError(null);
+
+    try {
+      const response = await api.analyzePageGlossary(currentPage.id, { refresh: true });
+      setGlossaryEntries(response.entries || []);
+      setActiveGlossaryEntryId(null);
+      if (response.used_fallback) {
+        toast.warning('Generated glossary using fallback text extraction.');
+      } else {
+        toast.success('Updated glossary highlights for this page!');
+      }
+    } catch (error) {
+      console.error('Failed to generate glossary:', error);
+      const message = error instanceof Error ? error.message : 'Failed to generate glossary';
+      setGlossaryError(message);
+      toast.error(message);
+    } finally {
+      setGlossaryGenerating(false);
+    }
+  };
+
+  const currentPageDescription = currentPage ? imageDescriptions[currentPage.id] : undefined;
+
+  const resolvedDescription = useMemo(() => {
+    if (!currentPage) return '';
+    if (currentPageDescription && currentPageDescription.trim().length > 0) {
+      return currentPageDescription;
+    }
+    return currentPage.image_description || '';
+  }, [currentPage, currentPageDescription]);
+
   const regenerateDescription = async () => {
     if (!bookId || !currentPage?.id || regenerating) return;
 
     setRegenerating(true);
     try {
-      const response = await fetch(`/api/books/${bookId}/pages/${currentPage.id}/regenerate-description`, {
+      const response = await fetch(buildApiUrl(`/api/books/${bookId}/pages/${currentPage.id}/regenerate-description`), {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
-        }
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          context: book ? `${book.title} by ${book.author}` : undefined
+        })
       });
 
       if (response.ok) {
@@ -350,6 +629,8 @@ const ReadingSession: React.FC = () => {
           ...prev,
           [currentPage.id]: data.description
         }));
+
+        setShowImageDescription(true);
 
         // Update the pages state
         setPages(prevPages => {
@@ -382,12 +663,84 @@ const ReadingSession: React.FC = () => {
     }
   };
 
+  const regenerateAllDescriptions = async () => {
+    if (!bookId || regeneratingAll) return;
+
+    // Show confirmation dialog
+    const confirmed = window.confirm(
+      'Are you sure you want to regenerate all image descriptions for this book? This will analyze all images again and may take a few minutes. The process cannot be interrupted once started.'
+    );
+
+    if (!confirmed) return;
+
+    setRegeneratingAll(true);
+    try {
+      const response = await fetch(buildApiUrl(`/api/books/${bookId}/regenerate-all-descriptions`), {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('auth_token')}`
+        }
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        
+        // Refresh book data to get updated descriptions
+        await fetchBookData();
+        
+        // Clear local image descriptions cache to force reload
+        setImageDescriptions({});
+
+        const { regenerated_pages, failed_pages, total_pages } = data.results;
+        
+        if (failed_pages === 0) {
+          toast.success(`Successfully regenerated all ${regenerated_pages} image descriptions!`);
+        } else if (regenerated_pages > 0) {
+          toast.warning(`Regenerated ${regenerated_pages} of ${total_pages} image descriptions. ${failed_pages} failed.`);
+        } else {
+          toast.error('Failed to regenerate any image descriptions. Please try again.');
+        }
+      } else {
+        const errorText = await response.text();
+        try {
+          const errorJson = JSON.parse(errorText);
+          throw new Error(errorJson.error || 'Failed to regenerate all descriptions');
+        } catch (e) {
+          throw new Error(errorText || 'Failed to regenerate all descriptions');
+        }
+      }
+    } catch (error) {
+      console.error('Error regenerating all descriptions:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to regenerate all descriptions');
+    } finally {
+      setRegeneratingAll(false);
+    }
+  };
+
+  const stopSpeaking = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      speechSynthesis.cancel();
+    }
+    if (descriptionAnnouncementRef.current && descriptionAnnouncementRef.current.parentElement) {
+      descriptionAnnouncementRef.current.parentElement.removeChild(descriptionAnnouncementRef.current);
+    }
+    descriptionAnnouncementRef.current = null;
+    setIsReadingDescription(false);
+  };
+
   const speakDescription = (description: string) => {
     if ('speechSynthesis' in window) {
-      // Stop any current speech
-      speechSynthesis.cancel();
+      stopSpeaking();
+
+      // Clean the description text for better TTS reading
+      const cleanedDescription = cleanTextForTTS(description);
       
-      const utterance = new SpeechSynthesisUtterance(description);
+      if (!cleanedDescription.trim()) {
+        console.warn('No text to speak after cleaning');
+        return;
+      }
+
+      const utterance = new SpeechSynthesisUtterance(cleanedDescription);
       if (selectedVoice) {
         const voice = voices.find(v => v.voiceURI === selectedVoice);
         if (voice) {
@@ -397,42 +750,87 @@ const ReadingSession: React.FC = () => {
       utterance.rate = 0.8;
       utterance.pitch = 1;
       utterance.volume = 1;
-      
-      // Add ARIA live region announcement
+
       const announcement = document.createElement('div');
       announcement.setAttribute('aria-live', 'polite');
       announcement.setAttribute('aria-atomic', 'true');
       announcement.className = 'sr-only';
-      announcement.textContent = `Reading image description: ${description}`;
+      announcement.textContent = `Reading image description: ${cleanedDescription}`;
       document.body.appendChild(announcement);
-      
-      // Remove announcement after speech
+      descriptionAnnouncementRef.current = announcement;
+
       utterance.onend = () => {
-        document.body.removeChild(announcement);
+        if (descriptionAnnouncementRef.current?.parentElement) {
+          descriptionAnnouncementRef.current.parentElement.removeChild(descriptionAnnouncementRef.current);
+        }
+        descriptionAnnouncementRef.current = null;
+        setIsReadingDescription(false);
       };
-      
+      utterance.onerror = () => {
+        if (descriptionAnnouncementRef.current?.parentElement) {
+          descriptionAnnouncementRef.current.parentElement.removeChild(descriptionAnnouncementRef.current);
+        }
+        descriptionAnnouncementRef.current = null;
+        setIsReadingDescription(false);
+      };
+
+      setIsReadingDescription(true);
       speechSynthesis.speak(utterance);
     }
   };
 
   const speakImageDescription = () => {
-    const description = currentPage?.image_description || imageDescriptions[currentPage?.id || ''];
-    if (description && 'speechSynthesis' in window) {
-      speakDescription(description);
+    if (resolvedDescription && 'speechSynthesis' in window) {
+      speakDescription(resolvedDescription);
     } else {
       toast.error('Text-to-speech not available');
     }
   };
 
+  const toggleAutoRead = () => {
+    setAutoReadDescriptions((prev) => {
+      const next = !prev;
+      if (!next) {
+        stopSpeaking();
+      } else if (next && resolvedDescription) {
+        speakDescription(resolvedDescription);
+      }
+      return next;
+    });
+  };
+
+  const handleDescriptionAudio = () => {
+    if (isReadingDescription) {
+      stopSpeaking();
+    } else {
+      speakImageDescription();
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopSpeaking();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!autoReadDescriptions) {
+      stopSpeaking();
+    }
+  }, [autoReadDescriptions]);
+
+  useEffect(() => {
+    if (!showImageDescription) {
+      stopSpeaking();
+    }
+  }, [showImageDescription]);
+
   // Auto-read descriptions when they become available
   useEffect(() => {
-    if (autoReadDescriptions && currentPage && imageDescriptions[currentPage.id]) {
-      const description = imageDescriptions[currentPage.id];
-      if (description) {
-        speakDescription(description);
-      }
+    if (autoReadDescriptions && resolvedDescription) {
+      speakDescription(resolvedDescription);
     }
-  }, [imageDescriptions, currentPage?.id, autoReadDescriptions]);
+  }, [resolvedDescription, autoReadDescriptions]);
 
   if (loading) {
     return (
@@ -488,7 +886,7 @@ const ReadingSession: React.FC = () => {
         pagesForm.append('pages', new File([blob], name, { type: 'image/png' }), name);
       });
 
-      const uploadResp = await fetch(`/api/upload/book/${book.id}/pages`, {
+      const uploadResp = await fetch(buildApiUrl(`/api/upload/book/${book.id}/pages`), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: pagesForm,
@@ -505,6 +903,82 @@ const ReadingSession: React.FC = () => {
       await fetchBookData();
     } catch (err) {
       console.error('PDF conversion failed:', err);
+      setConversionMessage(null);
+      toast.error(err instanceof Error ? err.message : 'PDF conversion failed');
+    } finally {
+      setConvertingPdf(false);
+      setLoading(false);
+    }
+  };
+
+  const handleConvertRemaining = async () => {
+    if (!book?.id || !(book as any).pdf_file_url || convertingPdf) return;
+
+    setConvertingPdf(true);
+    setConversionMessage('Downloading PDF...');
+    try {
+      const response = await fetch((book as any).pdf_file_url, { credentials: 'omit' });
+      if (!response.ok) throw new Error('Failed to download PDF');
+      const pdfBlob = await response.blob();
+      const pdfFile = new File([pdfBlob], `${book.title || 'book'}.pdf`, { type: 'application/pdf' });
+
+      const currentMaxPage = pages.length > 0 ? Math.max(...pages.map(p => p.page_number)) : 0;
+      const startPage = currentMaxPage + 1;
+      const total = totalPages || await getPdfPageCount(pdfFile);
+      if (startPage > total) {
+        toast.info('All pages are already converted.');
+        return;
+      }
+      const endPage = total;
+
+      setConversionMessage(`Converting remaining pages ${startPage}-${endPage}...`);
+      const images = await convertPdfFileToImages(pdfFile, 2, startPage, endPage);
+      const pageNumbers = images.map(img => img.pageNumber);
+      const texts = await extractPdfTextPerPage(pdfFile, pageNumbers);
+
+      setConversionMessage(`Uploading ${images.length} remaining page images...`);
+
+      const token = localStorage.getItem('auth_token');
+      if (!token) throw new Error('Authentication required');
+
+      const pagesForm = new FormData();
+      images.forEach(({ blob, pageNumber }) => {
+        const name = `page-${pageNumber}.png`;
+        pagesForm.append('pages', new File([blob], name, { type: 'image/png' }), name);
+      });
+
+      const uploadResp = await fetch(buildApiUrl(`/api/upload/book/${book.id}/pages`), {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: pagesForm,
+      });
+      const uploadResult = await uploadResp.json().catch(() => ({}));
+      if (!uploadResp.ok) {
+        throw new Error(uploadResult.error || 'Failed to upload page images');
+      }
+
+      // Update new pages with text_content
+      const newPages = uploadResult.uploaded_pages || [];
+      for (const newPage of newPages) {
+        const text = texts.find(t => t.pageNumber === newPage.page_number)?.text || '';
+        await fetch(buildApiUrl(`/api/upload/book/${book.id}/pages/${newPage.id}`), {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ text_content: text })
+        }).catch(err => console.error('Failed to update text for page', newPage.id, err));
+      }
+
+      setConversionMessage(null);
+      toast.success(`Converted and uploaded ${images.length} remaining pages with analysis.`);
+      // Reload book data
+      setLoading(true);
+      await fetchBookData();
+      setTotalPages(0);
+    } catch (err) {
+      console.error('Remaining PDF conversion failed:', err);
       setConversionMessage(null);
       toast.error(err instanceof Error ? err.message : 'PDF conversion failed');
     } finally {
@@ -576,7 +1050,8 @@ const ReadingSession: React.FC = () => {
             : 'bg-white'
         }`}>
         <div className="max-w-6xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
+          {/* Top Row - Navigation and Title */}
+          <div className="flex items-center justify-between mb-4">
             <div className="flex items-center space-x-4">
               <button
                 onClick={() => navigate('/library')}
@@ -590,55 +1065,78 @@ const ReadingSession: React.FC = () => {
                 <p className="text-sm text-gray-600">by {book.author}</p>
               </div>
             </div>
+            
+            {/* Page Progress */}
             <div className="flex items-center space-x-4">
               <span className="text-sm text-gray-600">
                 Page {currentPageIndex + 1} of {pages.length}
               </span>
-              <div className="flex items-center gap-2">
+              <div className="w-32 bg-gray-200 rounded-full h-2">
+                <div 
+                  className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                  style={{ width: `${((currentPageIndex + 1) / pages.length) * 100}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Control Panels Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            
+            {/* Reading Controls */}
+            <div className="bg-gray-50 rounded-lg p-3">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Reading Controls</h3>
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   onClick={() => setShowImageDescription(!showImageDescription)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
+                  className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                     showImageDescription
                       ? 'bg-blue-500 text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      : 'bg-white text-gray-700 hover:bg-gray-100 border'
                   }`}
                   aria-label={showImageDescription ? 'Hide image descriptions' : 'Show image descriptions'}
                 >
-                  <Eye className="h-4 w-4 inline mr-2" />
+                  <Eye className="h-4 w-4 inline mr-1" />
                   Descriptions
                 </button>
                 
                 <button
                    onClick={() => setHighContrastMode(!highContrastMode)}
-                   className={`px-4 py-2 rounded-lg transition-colors ${
+                   className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                      highContrastMode
                        ? 'bg-gray-800 text-white'
-                       : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                       : 'bg-white text-gray-700 hover:bg-gray-100 border'
                    }`}
                    aria-label={highContrastMode ? 'Disable high contrast mode' : 'Enable high contrast mode'}
                    title="Ctrl+H"
                  >
-                   <Contrast className="h-4 w-4 inline mr-2" />
+                   <Contrast className="h-4 w-4 inline mr-1" />
                    {highContrastMode ? 'Normal' : 'High Contrast'}
                  </button>
-                
+              </div>
+            </div>
+
+            {/* Audio & AI Controls */}
+            <div className="bg-gray-50 rounded-lg p-3">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Audio & AI</h3>
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
-                  onClick={() => setAutoReadDescriptions(!autoReadDescriptions)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
+                  onClick={toggleAutoRead}
+                  className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                     autoReadDescriptions
                       ? 'bg-green-500 text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      : 'bg-white text-gray-700 hover:bg-gray-100 border'
                   }`}
                   aria-label={autoReadDescriptions ? 'Disable auto-read descriptions' : 'Enable auto-read descriptions'}
                 >
-                  <Volume2 className="h-4 w-4 inline mr-2" />
+                  <Volume2 className="h-4 w-4 inline mr-1" />
                   Auto-Read
                 </button>
 
                 <select
                   value={selectedVoice}
                   onChange={(e) => setSelectedVoice(e.target.value)}
-                  className="bg-gray-200 text-gray-700 rounded-lg px-4 py-2"
+                  className="bg-white text-gray-700 rounded-lg px-3 py-2 text-sm border hover:bg-gray-50"
                 >
                   {voices.map(voice => (
                     <option key={voice.voiceURI} value={voice.voiceURI}>
@@ -648,40 +1146,91 @@ const ReadingSession: React.FC = () => {
                 </select>
                 
                 <button
+                  onClick={regenerateAllDescriptions}
+                  disabled={regeneratingAll}
+                  className={`px-3 py-2 rounded-lg transition-colors text-sm ${
+                    regeneratingAll
+                      ? 'bg-orange-500 text-white'
+                      : 'bg-orange-600 text-white hover:bg-orange-700'
+                  }`}
+                  aria-label="Regenerate all image descriptions"
+                  title="Regenerate AI descriptions for all images in this book"
+                >
+                  {regeneratingAll ? (
+                    <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full inline mr-1" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4 inline mr-1" />
+                  )}
+                  Regenerate
+                </button>
+              </div>
+            </div>
+
+            {/* Session Controls */}
+            <div className="bg-gray-50 rounded-lg p-3">
+              <h3 className="text-sm font-medium text-gray-700 mb-2">Session</h3>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
                   onClick={() => setShowDiscussion(!showDiscussion)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
+                  className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                     showDiscussion
                       ? 'bg-purple-500 text-white'
-                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      : 'bg-white text-gray-700 hover:bg-gray-100 border'
                   }`}
                   aria-label={showDiscussion ? 'Hide discussion panel' : 'Show discussion panel'}
                 >
-                  <MessageCircle className="h-4 w-4 inline mr-2" />
+                  <MessageCircle className="h-4 w-4 inline mr-1" />
                   Discuss
                 </button>
+                
+                <button
+                  onClick={() => setShowVocabulary(!showVocabulary)}
+                  className="bg-purple-500 text-white px-3 py-2 rounded-lg hover:bg-purple-600 transition-colors text-sm"
+                >
+                  <BookOpen className="h-4 w-4 inline mr-1" />
+                  Vocabulary
+                </button>
+                
+                <button
+                  onClick={handleFinishSession}
+                  className="bg-green-500 text-white px-3 py-2 rounded-lg hover:bg-green-600 transition-colors text-sm"
+                >
+                  <Star className="h-4 w-4 inline mr-1" />
+                  Finish
+                </button>
               </div>
-               
-               {/* Keyboard Navigation Help */}
-               <div className="text-sm text-gray-600 hidden md:block" aria-label="Keyboard shortcuts">
-                 <span className="mr-4">⬅️➡️ Navigate</span>
-                 <span className="mr-4">Space: Play/Pause</span>
-                 <span className="mr-4">Ctrl+Enter: Analyze</span>
-                 <span className="mr-4">Ctrl+D: Descriptions</span>
-                 <span>Ctrl+H: High Contrast</span>
-               </div>
-               
-               <button
-                 onClick={() => setShowVocabulary(!showVocabulary)}
-                className="bg-purple-500 text-white px-4 py-2 rounded-lg hover:bg-purple-600 transition-colors"
-              >
-                Vocabulary
-              </button>
-              <button
-                onClick={handleFinishSession}
-                className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition-colors"
-              >
-                Finish Session
-              </button>
+            </div>
+
+            {/* Conversion Status */}
+            {totalPages > 0 && (
+              <div className="bg-gray-50 rounded-lg p-3">
+                <h3 className="text-sm font-medium text-gray-700 mb-2">Conversion</h3>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-sm text-gray-600">{pages.length}/{totalPages} pages</span>
+                  {pages.length < totalPages && !convertingPdf && (
+                    <button
+                      onClick={handleConvertRemaining}
+                      className="bg-blue-500 text-white px-3 py-1 rounded text-xs hover:bg-blue-600 transition-colors"
+                    >
+                      Convert Remaining
+                    </button>
+                  )}
+                  {convertingPdf && (
+                    <span className="text-sm text-blue-600">{conversionMessage}</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Keyboard Shortcuts Help */}
+          <div className="mt-3 pt-3 border-t border-gray-200">
+            <div className="flex flex-wrap gap-4 text-xs text-gray-500">
+              <span>⬅️➡️ Navigate</span>
+              <span>Space: Play/Pause</span>
+              <span>Ctrl+Enter: Analyze</span>
+              <span>Ctrl+D: Descriptions</span>
+              <span>Ctrl+H: High Contrast</span>
             </div>
           </div>
         </div>
@@ -697,8 +1246,8 @@ const ReadingSession: React.FC = () => {
           {/* Screen Reader Instructions */}
           <div className="sr-only" aria-live="polite">
             Reading session for {book?.title}. Page {currentPageIndex + 1} of {pages.length}.
-            {currentPage?.image_description && showImageDescription && 
-              `Image description available: ${currentPage.image_description}`
+            {resolvedDescription && showImageDescription && 
+              `Image description available: ${resolvedDescription}`
             }
           </div>
           {/* Main Reading Area */}
@@ -714,15 +1263,110 @@ const ReadingSession: React.FC = () => {
               {/* Page Image */}
               {currentPage?.image_url && (
                 <div className="mb-6">
-                  <div className="relative">
+                  <div
+                    ref={imageWrapperRef}
+                    className="relative rounded-lg border bg-white dark:bg-gray-900"
+                    role="presentation"
+                  >
                     <img
+                      ref={imageRef}
                       src={currentPage.image_url}
                       alt={`Page ${currentPage.page_number}`}
-                      className="w-full h-64 object-contain rounded-lg border"
+                      className="w-full h-[75vh] md:h-[85vh] lg:h-[90vh] 2xl:h-[95vh] object-contain rounded-lg"
+                      onLoad={handleImageLoad}
                     />
-                    
+
+                    {glossaryOverlayReady && (
+                      <div
+                        className="absolute top-0 left-0 z-20"
+                        style={overlayContainerStyle}
+                        aria-hidden={!showGlossaryOverlay}
+                      >
+                        <div className="relative w-full h-full pointer-events-none">
+                          {glossaryEntries.map((entry) => {
+                            const widthPercent = Math.min(100, Math.max(entry.position?.width ?? 0.08, 0.05) * 100);
+                            const heightPercent = Math.min(100, Math.max(entry.position?.height ?? 0.06, 0.05) * 100);
+                            const topPercent = Math.min(100 - heightPercent, Math.max((entry.position?.top ?? 0) * 100, 0));
+                            const leftPercent = Math.min(100 - widthPercent, Math.max((entry.position?.left ?? 0) * 100, 0));
+
+                            return (
+                              <button
+                                key={entry.id}
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleGlossaryWordClick(entry.id);
+                                }}
+                                className={`absolute flex items-center justify-center rounded-md border text-xs font-semibold uppercase tracking-wide transition-all shadow-sm ${
+                                  activeGlossaryEntryId === entry.id
+                                    ? 'bg-blue-600/60 border-blue-500 text-white scale-105'
+                                    : 'bg-blue-500/20 border-blue-400 text-blue-900 hover:bg-blue-500/30'
+                                }`}
+                                style={{
+                                  top: `${topPercent}%`,
+                                  left: `${leftPercent}%`,
+                                  width: `${widthPercent}%`,
+                                  height: `${heightPercent}%`,
+                                  pointerEvents: 'auto'
+                                }}
+                                aria-label={`Glossary highlight for ${entry.word}`}
+                              >
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {activeGlossaryEntry && glossaryOverlayReady && (
+                      <div
+                        className="absolute z-30 max-w-xs rounded-xl border border-blue-200 bg-white/95 p-4 text-left shadow-xl backdrop-blur-md dark:border-blue-500/40 dark:bg-slate-900/95"
+                        style={{
+                          position: 'absolute',
+                          ...getPopoverStyle(activeGlossaryEntry)
+                        }}
+                        role="dialog"
+                        aria-label={`Glossary details for ${activeGlossaryEntry.word}`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h3 className="text-base font-semibold text-blue-700 dark:text-blue-200">
+                              {activeGlossaryEntry.word}
+                            </h3>
+                            <p className="text-sm text-gray-500 dark:text-gray-300">
+                              {activeGlossaryEntry.translation}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setActiveGlossaryEntryId(null)}
+                            className="text-xs text-gray-500 hover:text-gray-700"
+                            aria-label="Close glossary popover"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <p className="mt-3 text-sm text-gray-700 dark:text-gray-200 leading-relaxed">
+                          {activeGlossaryEntry.definition}
+                        </p>
+                        <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-300">
+                          <span className="uppercase tracking-wide">
+                            Difficulty: {activeGlossaryEntry.difficulty}
+                          </span>
+                          <span>
+                            Confidence: {Math.round((activeGlossaryEntry.confidence ?? 0) * 100)}%
+                          </span>
+                        </div>
+                        {activeGlossaryEntry.metadata?.notes && (
+                          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                            {activeGlossaryEntry.metadata.notes}
+                          </p>
+                        )}
+                      </div>
+                    )}
+
                     {/* Image Controls Overlay */}
-                    <div className="absolute top-2 right-2 flex space-x-2">
+                    <div className="absolute top-2 right-2 flex flex-wrap justify-end gap-2">
                       <button
                         onClick={() => setShowImageDescription(!showImageDescription)}
                         className={`p-2 rounded-full shadow-lg transition-colors ${
@@ -734,11 +1378,44 @@ const ReadingSession: React.FC = () => {
                       >
                         {showImageDescription ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                       </button>
-                      
+
+                      {glossaryEntries.length > 0 && (
+                        <button
+                          onClick={() => setShowGlossaryOverlay(prev => !prev)}
+                          className={`p-2 rounded-full shadow-lg transition-colors ${
+                            showGlossaryOverlay
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-white text-gray-600 hover:bg-gray-50'
+                          }`}
+                          title={showGlossaryOverlay ? 'Hide glossary overlay' : 'Show glossary overlay'}
+                        >
+                          <BookOpen className="h-4 w-4" />
+                        </button>
+                      )}
+
+                      {isParentViewer && (
+                        <button
+                          onClick={handleGenerateGlossary}
+                          disabled={glossaryGenerating}
+                          className={`p-2 rounded-full shadow-lg transition-colors ${
+                            glossaryGenerating
+                              ? 'bg-purple-400 text-white'
+                              : 'bg-purple-500 text-white hover:bg-purple-600'
+                          } disabled:opacity-60`}
+                          title="Generate glossary for this page"
+                        >
+                          {glossaryGenerating ? (
+                            <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                          ) : (
+                            <RefreshCw className="h-4 w-4" />
+                          )}
+                        </button>
+                      )}
+
                       <button
                         onClick={analyzeCurrentImage}
                         disabled={analyzingImage}
-                        className="p-2 rounded-full bg-purple-500 text-white shadow-lg hover:bg-purple-600 transition-colors disabled:opacity-50"
+                        className="p-2 rounded-full bg-fuchsia-500 text-white shadow-lg hover:bg-fuchsia-600 transition-colors disabled:opacity-50"
                         title="Analyze image with AI"
                       >
                         {analyzingImage ? (
@@ -747,21 +1424,38 @@ const ReadingSession: React.FC = () => {
                           <Sparkles className="h-4 w-4" />
                         )}
                       </button>
-                      
-                      {(currentPage?.image_description || imageDescriptions[currentPage?.id]) && (
+
+                      {resolvedDescription && (
                         <button
-                          onClick={speakImageDescription}
-                          className="p-2 rounded-full bg-green-500 text-white shadow-lg hover:bg-green-600 transition-colors"
-                          title="Listen to image description"
+                          onClick={handleDescriptionAudio}
+                          className={`p-2 rounded-full shadow-lg transition-colors ${
+                            isReadingDescription
+                              ? 'bg-red-500 text-white hover:bg-red-600'
+                              : 'bg-green-500 text-white hover:bg-green-600'
+                          }`}
+                          title={isReadingDescription ? 'Stop image description playback' : 'Listen to image description'}
                         >
-                          <Volume1 className="h-4 w-4" />
+                          {isReadingDescription ? <VolumeX className="h-4 w-4" /> : <Volume1 className="h-4 w-4" />}
                         </button>
                       )}
                     </div>
+
+                    {glossaryLoading && (
+                      <div className="absolute bottom-3 left-3 flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 text-xs font-medium text-blue-600 shadow-md">
+                        <span className="h-3 w-3 animate-spin rounded-full border border-blue-500 border-t-transparent" />
+                        Loading glossary…
+                      </div>
+                    )}
+
+                    {glossaryError && (
+                      <div className="absolute bottom-3 left-3 max-w-xs rounded-lg bg-red-500/90 px-3 py-2 text-xs text-white shadow-lg">
+                        {glossaryError}
+                      </div>
+                    )}
                   </div>
                   
                   {/* Image Description */}
-                  {showImageDescription && (currentPage?.image_description || imageDescriptions[currentPage?.id]) && (
+                  {showImageDescription && resolvedDescription && (
                     <div className={`mt-4 p-4 rounded-lg border transition-colors duration-300 ${
                       highContrastMode 
                         ? 'bg-gray-700 border-gray-500 text-white' 
@@ -816,7 +1510,7 @@ const ReadingSession: React.FC = () => {
                                 }`}>{children}</blockquote>
                               }}
                             >
-                              {currentPage?.image_description || imageDescriptions[currentPage?.id]}
+                              {resolvedDescription}
                             </ReactMarkdown>
                           </div>
                         </div>
@@ -1003,3 +1697,4 @@ const ReadingSession: React.FC = () => {
 };
 
 export default ReadingSession;
+  const buildApiUrl = (path: string) => `${API_BASE_URL.replace(/\/$/, '')}${path}`;
