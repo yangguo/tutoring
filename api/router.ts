@@ -148,20 +148,7 @@ function generateFallbackGlossaryFromText(text: string | null | undefined, maxEn
   }));
 }
 
-function normalizeBoundingValue(value: unknown, fallback: number, scale?: number): number {
-  const numeric = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
-  if (!Number.isFinite(numeric)) {
-    return fallback;
-  }
 
-  // Many models emit percentages (0-100). Convert anything clearly above 1.
-  if (scale && scale > 1.2) {
-    return clamp01(numeric / scale, fallback);
-  }
-
-  const scaled = numeric > 1.2 ? numeric / 100 : numeric;
-  return clamp01(scaled, fallback);
-}
 
 function attemptRepairJsonResponse(rawContent: string): string | null {
   if (!rawContent) return null;
@@ -169,10 +156,15 @@ function attemptRepairJsonResponse(rawContent: string): string | null {
   let candidate = rawContent.replace(/```json|```/g, '').trim();
   if (!candidate) return null;
 
+  console.log('Attempting to repair JSON response, original length:', rawContent.length);
+  console.log('Candidate after cleanup, length:', candidate.length);
+
   // If there's trailing partially-written text after the last closing brace, trim it off.
   const lastClosingBrace = candidate.lastIndexOf('}');
   if (lastClosingBrace !== -1 && lastClosingBrace < candidate.length - 1) {
-    candidate = candidate.slice(0, lastClosingBrace + 1);
+    const trimmed = candidate.slice(0, lastClosingBrace + 1);
+    console.log('Trimmed trailing text after last closing brace, new length:', trimmed.length);
+    candidate = trimmed;
   }
 
   candidate = candidate.replace(/\s+$/, '');
@@ -181,56 +173,37 @@ function attemptRepairJsonResponse(rawContent: string): string | null {
 
   let openSquares = countChar(candidate, '\\[');
   let closeSquares = countChar(candidate, '\\]');
+  let openCurlies = countChar(candidate, '{');
+  let closeCurlies = countChar(candidate, '}');
+
+  console.log('Bracket counts - Open squares:', openSquares, 'Close squares:', closeSquares, 'Open curlies:', openCurlies, 'Close curlies:', closeCurlies);
+
   while (closeSquares < openSquares) {
     candidate += ']';
     closeSquares += 1;
   }
 
-  let openCurlies = countChar(candidate, '{');
-  let closeCurlies = countChar(candidate, '}');
   while (closeCurlies < openCurlies) {
     candidate += '}';
     closeCurlies += 1;
   }
 
+  if (openSquares !== closeSquares || openCurlies !== closeCurlies) {
+    console.log('Added missing brackets - Final length:', candidate.length);
+  }
+
   try {
     JSON.parse(candidate);
+    console.log('Successfully repaired JSON response');
     return candidate;
   } catch (repairError) {
     console.error('Failed to repair AI JSON response:', repairError);
+    console.log('Failed candidate preview:', candidate.slice(-200)); // Show last 200 chars
     return null;
   }
 }
 
-function deriveBoundingScale(entries: Array<{ bounding_box?: { top?: number; left?: number; width?: number; height?: number } }>) {
-  let maxRight = 0;
-  let maxBottom = 0;
-  let maxWidth = 0;
-  let maxHeight = 0;
 
-  for (const entry of entries) {
-    const box = entry.bounding_box;
-    if (!box) continue;
-    const left = typeof box.left === 'number' ? box.left : Number.parseFloat(String(box.left ?? ''));
-    const width = typeof box.width === 'number' ? box.width : Number.parseFloat(String(box.width ?? ''));
-    const top = typeof box.top === 'number' ? box.top : Number.parseFloat(String(box.top ?? ''));
-    const height = typeof box.height === 'number' ? box.height : Number.parseFloat(String(box.height ?? ''));
-
-    if (Number.isFinite(left) && Number.isFinite(width)) {
-      maxRight = Math.max(maxRight, left + width, left, width);
-      maxWidth = Math.max(maxWidth, width);
-    }
-    if (Number.isFinite(top) && Number.isFinite(height)) {
-      maxBottom = Math.max(maxBottom, top + height, top, height);
-      maxHeight = Math.max(maxHeight, height);
-    }
-  }
-
-  const scaleX = maxRight > 1.2 ? maxRight : 1;
-  const scaleY = maxBottom > 1.2 ? maxBottom : 1;
-
-  return { scaleX, scaleY, maxWidth, maxHeight };
-}
 
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // Achievements Routes
@@ -1756,6 +1729,9 @@ router.post(
           `You must respond with a single JSON object matching this schema: { "entries": [ { "word": string, ` +
           `"definition": string, "translation": string, "difficulty": "beginner" | "intermediate" | "advanced" | "challenging", ` +
           `"confidence": number between 0 and 1, "bounding_box": { "top": number, "left": number, "width": number, "height": number }, "notes"?: string } ] }. ` +
+          `IMPORTANT: All bounding_box coordinates must be normalized between 0 and 1 relative to the image dimensions. ` +
+          `For example, if a word is at the top-left corner, use top: 0, left: 0. If at bottom-right, use top: 0.9, left: 0.9. ` +
+          `Width and height should also be normalized (e.g., width: 0.1 means 10% of image width). ` +
           `All floating point numbers must use a dot decimal (.) and at most three decimals. Do not include any explanatory text before or after the JSON.`;
 
         const messages = [
@@ -1797,7 +1773,7 @@ router.post(
             body: JSON.stringify({
               model: visionModel,
               messages,
-              max_tokens: 700,
+              max_tokens: 1500, // Increased from 700 to allow for complete glossary responses
               temperature: 0.2,
               response_format: {
                 type: 'json_object'
@@ -1826,6 +1802,7 @@ router.post(
               const content = message.content.trim();
               if (!content.endsWith('}') && !content.endsWith(']}')) {
                 console.log('Response appears to be incomplete - missing closing braces');
+                console.log('Response ends with:', content.slice(-50)); // Show last 50 chars
                 metadata.incomplete_response = true;
               }
               
@@ -1922,11 +1899,6 @@ router.post(
         }
       }
 
-      const { scaleX, scaleY, maxWidth, maxHeight } = deriveBoundingScale(aiEntries);
-      if (scaleX > 1.2 || scaleY > 1.2) {
-        metadata.bounding_scale = { scaleX, scaleY, maxWidth, maxHeight };
-      }
-
       const mappedEntries = aiEntries.slice(0, max_entries).map((entry, index) => {
         const fallbackPosition = createFallbackPosition(index, aiEntries.length);
 
@@ -1935,12 +1907,17 @@ router.post(
         const width = entry.bounding_box?.width;
         const height = entry.bounding_box?.height;
 
+        console.log(`[Glossary Debug] Entry "${entry.word}" raw bounding box:`, { top, left, width, height });
+
+        // Use normalized coordinates directly from AI (0-1 range) with clamping
         const normalizedPosition = entry.bounding_box ? {
-          top: normalizeBoundingValue(top, fallbackPosition.top, scaleY),
-          left: normalizeBoundingValue(left, fallbackPosition.left, scaleX),
-          width: Math.max(normalizeBoundingValue(width, 0.18, scaleX), 0.04),
-          height: Math.max(normalizeBoundingValue(height, 0.1, scaleY), 0.04)
+          top: Math.max(0, Math.min(1, typeof top === 'number' ? top : fallbackPosition.top)),
+          left: Math.max(0, Math.min(1, typeof left === 'number' ? left : fallbackPosition.left)),
+          width: Math.max(0.04, Math.min(1, typeof width === 'number' ? width : 0.18)),
+          height: Math.max(0.04, Math.min(1, typeof height === 'number' ? height : 0.1))
         } : fallbackPosition;
+
+        console.log(`[Glossary Debug] Entry "${entry.word}" normalized position:`, normalizedPosition);
 
         return {
           page_id: pageId,

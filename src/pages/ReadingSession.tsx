@@ -1302,7 +1302,6 @@ const ReadingSession: React.FC = () => {
                                 }}
                                 aria-label={`Glossary highlight for ${entry.word}`}
                               >
-                                <span className="px-1 truncate">{entry.word}</span>
                               </button>
                             );
                           })}
