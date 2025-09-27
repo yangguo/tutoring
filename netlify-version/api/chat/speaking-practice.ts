@@ -97,7 +97,7 @@ IMPORTANT: Keep responses short (2-3 sentences max). Reference the specific page
     }
 
     const data = await response.json();
-    const content = data.choices[0]?.message?.content;
+    const content = (data as any).choices[0]?.message?.content;
     
     if (!content) {
       throw new Error('No content received from OpenAI API');

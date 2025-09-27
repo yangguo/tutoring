@@ -2,12 +2,12 @@
  * Netlify Function handler for API routes
  * This function handles all API routes using the existing Express app
  */
-const serverlessHttp = require('serverless-http');
+import serverlessHttp from 'serverless-http';
 
 // Import the existing Express app using dynamic import to handle ES modules
 const getApp = async () => {
   try {
-    const { default: app } = await import('../../api/app.js');
+    const { default: app } = await import('../../dist-api/app.js');
     return app;
   } catch (error) {
     console.error('Error importing app:', error);
@@ -16,12 +16,10 @@ const getApp = async () => {
 };
 
 // Create the handler
-exports.handler = async (event, context) => {
+export const handler = async (event, context) => {
   try {
     const app = await getApp();
-    const serverlessHandler = serverlessHttp(app, {
-      basePath: '/.netlify/functions/api',
-    });
+    const serverlessHandler = serverlessHttp(app);
     
     return serverlessHandler(event, context);
   } catch (error) {

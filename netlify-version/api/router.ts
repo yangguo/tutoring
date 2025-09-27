@@ -1386,7 +1386,7 @@ router.post('/books/analyze-image', authenticateToken, async (req: Request, res:
             ensureFallback('OpenAI Vision API returned a non-200 response.');
           } else {
             const openaiResult = await openaiResponse.json();
-            const rawContent = openaiResult.choices?.[0]?.message?.content;
+            const rawContent = (openaiResult as any).choices?.[0]?.message?.content;
 
             const extractContentString = (content: unknown): string | null => {
               if (!content) return null;
@@ -1522,8 +1522,8 @@ router.post('/books/:bookId/analyze-images', authenticateToken, requireRole(['ad
           results.push({
             page_id: page.id,
             page_number: page.page_number,
-            description: analysis.description,
-            vocabulary: analysis.vocabulary
+            description: (analysis as any).description,
+            vocabulary: (analysis as any).vocabulary
           });
           processed++;
         } else {
@@ -2425,7 +2425,7 @@ router.post('/books/:bookId/pages/:pageId/regenerate-description', authenticateT
             console.error('OpenAI Vision API error during regeneration:', await response.text());
           } else {
             const openaiResult = await response.json();
-            newDescription = openaiResult.choices[0]?.message?.content?.trim() || null;
+            newDescription = (openaiResult as any).choices[0]?.message?.content?.trim() || null;
           }
         } catch (fetchError) {
           const elapsed = Date.now() - startTime;
