@@ -6,6 +6,7 @@
   "scripts": {
     "client:dev": "vite",
     "build": "tsc && vite build",
+    "build:api": "tsc -p tsconfig.api.json",
     "build:netlify": "npm run build",
     "lint": "eslint .",
     "preview": "vite preview",

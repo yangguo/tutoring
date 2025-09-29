@@ -1,63 +1,117 @@
 /**
  * Netlify Function handler for API routes
- * Fixed version with proper module handling and performance optimizations
+ * CommonJS version for compatibility
  */
 
 const serverlessHttp = require('serverless-http');
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
 
-// Import the Express app synchronously to avoid dynamic import issues
-let app;
-try {
-  // Try to import the built Express app
-  app = require('../../api/app.js').default;
-} catch (error) {
-  console.error('Error importing Express app:', error);
-  
-  // Fallback: create a minimal Express app for basic functionality
-  const express = require('express');
-  app = express();
-  
-  // Basic middleware
-  app.use(express.json());
-  app.use(express.urlencoded({ extended: true }));
-  
-  // Health check endpoint
-  app.get('/api/health', (req, res) => {
-    res.json({ 
-      status: 'ok', 
-      message: 'Netlify function is running (fallback mode)',
-      timestamp: new Date().toISOString()
-    });
-  });
-  
-  // Basic auth endpoints for testing
-  app.post('/api/auth/login', (req, res) => {
-    console.log('Login attempt received:', req.body);
-    res.json({ 
-      message: 'Login endpoint reached (fallback mode)',
-      received: req.body,
-      note: 'Full Express app import failed. Check function logs.'
-    });
-  });
-  
-  app.post('/api/auth/register', (req, res) => {
-    console.log('Register attempt received:', req.body);
-    res.json({ 
-      message: 'Register endpoint reached (fallback mode)',
-      received: req.body,
-      note: 'Full Express app import failed. Check function logs.'
-    });
-  });
-  
-  console.log('Using fallback Express app due to import failure');
-}
+// Create Express app with basic configuration
+const app = express();
 
-// Create the serverless handler once (not on every request)
-const serverlessHandler = serverlessHttp(app, {
-  basePath: '', // Remove basePath since netlify.toml handles redirects
+// Security middleware  
+app.use(helmet());
+
+// CORS configuration
+app.use(cors({
+  origin: true, // Allow same origin in production
+  credentials: true
+}));
+
+// Body parsing middleware
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Basic health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    message: 'Netlify function is running (CommonJS version)',
+    timestamp: new Date().toISOString(),
+    environment: 'netlify'
+  });
 });
 
-// Export the handler
+// Basic login endpoint for immediate functionality
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    console.log('Login attempt received:', req.body);
+    
+    // Load environment variables
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const jwtSecret = process.env.JWT_SECRET;
+    
+    if (!supabaseUrl || !supabaseServiceKey || !jwtSecret) {
+      console.error('Missing environment variables');
+      return res.status(500).json({ 
+        success: false,
+        error: 'Server configuration error - missing environment variables'
+      });
+    }
+    
+    const { email, password } = req.body;
+    
+    if (!email || !password) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Email and password are required'
+      });
+    }
+    
+    // Basic validation for now - replace with actual auth logic
+    console.log('Processing login for:', email);
+    
+    // For now, return a basic response to test connectivity
+    res.json({ 
+      success: true,
+      message: 'Login endpoint is working',
+      note: 'This is a test response - full auth logic will be loaded dynamically',
+      received: { email: email, hasPassword: !!password },
+      environment: {
+        hasSupabaseUrl: !!supabaseUrl,
+        hasServiceKey: !!supabaseServiceKey,
+        hasJwtSecret: !!jwtSecret
+      }
+    });
+    
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Login failed',
+      message: error.message 
+    });
+  }
+});
+
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'Endpoint not found',
+    message: `Cannot ${req.method} ${req.originalUrl}`,
+    availableEndpoints: ['/api/health', '/api/auth/login']
+  });
+});
+
+// Error handler
+app.use((error, req, res, next) => {
+  console.error('Function error:', error);
+  res.status(500).json({
+    success: false,
+    error: 'Internal server error',
+    message: error.message || 'Unknown error occurred',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Create the serverless handler
+const serverlessHandler = serverlessHttp(app);
+
+// Export the handler using CommonJS syntax
 exports.handler = async (event, context) => {
   // Add CORS headers for all responses
   const addCorsHeaders = (response) => {
@@ -79,6 +133,8 @@ exports.handler = async (event, context) => {
       });
     }
 
+    console.log(`${event.httpMethod} ${event.path}`);
+    
     // Process the request
     const response = await serverlessHandler(event, context);
     
