@@ -55,6 +55,11 @@
    NODE_ENV=production
    ```
 
+   **CRITICAL**: **DO NOT** set `VITE_API_URL` in Netlify!
+   - When undefined, the app uses `window.location.origin`
+   - This makes preview deployments work correctly
+   - Setting it causes CORS errors in preview deployments
+
 4. **Deploy**
    - Click "Deploy site"
    - Future pushes to your main branch will auto-deploy
@@ -155,6 +160,13 @@ curl https://your-site.netlify.app/api/health/checks
    - Verify all required env vars are set in Netlify dashboard
    - Check for typos in variable names
    - Ensure sensitive data is not in git
+
+5. **CORS errors in preview deployments**
+   - **Symptom**: Preview deployment cannot call its own API
+   - **Error**: `Access to fetch at 'https://your-site.netlify.app/api/...' from origin 'https://deploy-preview-X--your-site.netlify.app' has been blocked by CORS policy`
+   - **Cause**: `VITE_API_URL` is set in Netlify environment variables
+   - **Fix**: Delete `VITE_API_URL` from Netlify environment variables (Site Settings > Environment Variables)
+   - **Result**: Each deployment (production/preview) will use its own API endpoint via `window.location.origin`
 
 ### Performance Optimization
 

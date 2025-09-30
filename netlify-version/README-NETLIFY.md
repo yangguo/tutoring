@@ -27,10 +27,16 @@ SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
 # Optional for AI features
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-4o-mini
-
-# Frontend API URL (leave empty for same-origin)
-VITE_API_URL=
 ```
+
+**IMPORTANT**: **DO NOT** set `VITE_API_URL` in Netlify environment variables!
+
+When `VITE_API_URL` is not set, the frontend automatically uses `window.location.origin`, which ensures:
+- Production deployments call production API (`fluffy-sunburst-4208f5.netlify.app`)
+- Preview deployments call preview API (`deploy-preview-X--fluffy-sunburst-4208f5.netlify.app`)
+- No CORS errors between different deployment contexts
+
+If you set `VITE_API_URL` to a specific URL, all deployments will try to use that URL, causing CORS errors in preview deployments.
 
 ### 2. Deploy to Netlify
 1. Connect your GitHub repository to Netlify
@@ -114,9 +120,24 @@ The Netlify function (`netlify/functions/api.js`) provides:
 - Verify netlify.toml redirects are correct
 - Ensure function deploys without errors
 
-### 3. CORS Errors
+### 3. CORS Errors in Preview Deployments
+**Problem**: Preview deployment gets CORS error when calling production API  
+**Error Example**: 
+```
+Access to fetch at 'https://fluffy-sunburst-4208f5.netlify.app/api/auth/login' 
+from origin 'https://deploy-preview-9--fluffy-sunburst-4208f5.netlify.app' 
+has been blocked by CORS policy
+```
+**Root Cause**: `VITE_API_URL` environment variable is set to production URL, forcing preview deployments to call production API instead of their own API  
+**Solution**: 
+1. Go to Netlify Dashboard → Site Settings → Environment Variables
+2. **Delete** or **unset** the `VITE_API_URL` variable
+3. Redeploy to apply changes
+4. Preview deployments will now use their own API endpoints automatically
+
+### 4. General CORS Errors
 **Problem**: Cross-origin request blocked  
-**Solution**: Function includes comprehensive CORS headers
+**Solution**: Function includes comprehensive CORS headers in responses
 
 ## 📁 Project Structure
 
