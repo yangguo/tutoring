@@ -27,18 +27,27 @@
 
 ## Production Deployment
 
+### Important: Repository Structure
+
+This repository has a `netlify.toml` file at the root that configures Netlify to use the `netlify-version` directory as the base directory. This is **critical** for the deployment to work correctly.
+
+If you don't have the root `netlify.toml` file, the deployment will fail with 404 errors on API endpoints.
+
 ### Option 1: Netlify Dashboard (Recommended)
 
 1. **Connect Repository**
    - Go to https://app.netlify.com/
    - Click "New site from Git"
    - Connect your GitHub/GitLab repository
-   - Select the `netlify-version` directory as the base directory (if not using the root)
+   - **Important**: Do NOT manually set a base directory - the `netlify.toml` at the repository root handles this automatically
 
 2. **Build Settings**
-   - Build command: `npm run build:netlify`
-   - Publish directory: `dist`
-   - Functions directory: `netlify/functions`
+   - The `netlify.toml` file configures:
+     - Base directory: `netlify-version`
+     - Build command: `npm run build:netlify`
+     - Publish directory: `dist`
+     - Functions directory: `netlify/functions`
+   - You can leave these fields empty in the Netlify dashboard
 
 3. **Environment Variables**
    Go to Site Settings > Environment Variables and add:
@@ -54,6 +63,11 @@
    JWT_EXPIRES_IN=7d
    NODE_ENV=production
    ```
+
+   **CRITICAL**: **DO NOT** set `VITE_API_URL` in Netlify!
+   - When undefined, the app uses `window.location.origin`
+   - This makes preview deployments work correctly
+   - Setting it causes CORS errors in preview deployments
 
 4. **Deploy**
    - Click "Deploy site"
@@ -155,6 +169,13 @@ curl https://your-site.netlify.app/api/health/checks
    - Verify all required env vars are set in Netlify dashboard
    - Check for typos in variable names
    - Ensure sensitive data is not in git
+
+5. **CORS errors in preview deployments**
+   - **Symptom**: Preview deployment cannot call its own API
+   - **Error**: `Access to fetch at 'https://your-site.netlify.app/api/...' from origin 'https://deploy-preview-X--your-site.netlify.app' has been blocked by CORS policy`
+   - **Cause**: `VITE_API_URL` is set in Netlify environment variables
+   - **Fix**: Delete `VITE_API_URL` from Netlify environment variables (Site Settings > Environment Variables)
+   - **Result**: Each deployment (production/preview) will use its own API endpoint via `window.location.origin`
 
 ### Performance Optimization
 

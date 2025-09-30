@@ -2,146 +2,208 @@
 
 This is the Netlify deployment version of the Interactive English Tutor web application. It has been adapted from the original Vercel deployment to work with Netlify's serverless functions and build system.
 
-## 🚀 Netlify Deployment Setup
+## 🚀 Quick Fix for Login Issues
+
+**Problem**: After deployment to Netlify, login fails with "network error"  
+**Solution**: The Netlify function has been fixed to handle authentication correctly.
+
+### Fixed Components:
+1. **Netlify Function** (`netlify/functions/api.js`) - Now properly handles CommonJS/ES module compatibility
+2. **Environment Variables** - Template provided for required configuration
+3. **CORS Headers** - Comprehensive CORS support added for cross-origin requests
+4. **Demo Authentication** - Working demo login system for testing
+
+## 🛠️ Deployment Instructions
 
 ### Prerequisites
-- Node.js (v18 or higher)
-- npm or yarn
-- Netlify account
-- Supabase account
-- OpenAI API key
+**CRITICAL**: This repository requires a `netlify.toml` file at the **repository root** that configures the base directory to `netlify-version`. Without this file, deployments will fail with 404 errors on API endpoints.
 
-### Local Development
+The root `netlify.toml` has been added and should be committed to your repository.
+
+### 1. Environment Variables Setup
+Set these in your Netlify Dashboard (Site Settings > Environment Variables):
+
+```bash
+# Required for authentication
+JWT_SECRET=your-secure-random-string-here
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-supabase-service-role-key
+
+# Optional for AI features
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4o-mini
+```
+
+**IMPORTANT**: **DO NOT** set `VITE_API_URL` in Netlify environment variables!
+
+When `VITE_API_URL` is not set, the frontend automatically uses `window.location.origin`, which ensures:
+- Production deployments call production API (`fluffy-sunburst-4208f5.netlify.app`)
+- Preview deployments call preview API (`deploy-preview-X--fluffy-sunburst-4208f5.netlify.app`)
+- No CORS errors between different deployment contexts
+
+If you set `VITE_API_URL` to a specific URL, all deployments will try to use that URL, causing CORS errors in preview deployments.
+
+### 2. Deploy to Netlify
+1. Connect your GitHub repository to Netlify
+2. The `netlify.toml` at the repository root automatically configures:
+   - Base directory: `netlify-version`
+   - Build command: `npm run build:netlify`
+   - Publish directory: `dist`
+   - Functions directory: `netlify/functions`
+3. You can leave build settings empty in Netlify dashboard - `netlify.toml` handles everything
+4. Deploy
+
+### 3. Test the Deployment
+After deployment, you can test with these demo accounts:
+- **Child**: child@demo.com / password123
+- **Parent**: parent@demo.com / password123  
+- **Admin**: admin@demo.com / password123
+
+## 📊 Architecture Overview
+
+### Request Flow
+1. User visits `https://your-site.netlify.app/login`
+2. Frontend loads from `dist/` directory
+3. Login form submits to `/api/auth/login`
+4. Netlify redirects to `/.netlify/functions/api/auth/login` (via netlify.toml)
+5. Serverless function processes authentication
+6. Returns JWT token and user data
+
+### Key Files
+- `netlify.toml` - Build configuration and API redirects
+- `netlify/functions/api.js` - Main serverless function (CommonJS)
+- `netlify/functions/package.json` - Forces CommonJS module type
+- `.env` - Local development environment variables
+
+## 🔧 Local Development
 
 1. **Install dependencies**
    ```bash
    npm install
    ```
 
-2. **Environment Setup**
+2. **Create environment file**
    ```bash
    cp .env.example .env
+   # Edit .env with your values
    ```
-   Fill in your environment variables:
-   - `SUPABASE_URL` - Your Supabase project URL
-   - `SUPABASE_SERVICE_ROLE_KEY` - Your Supabase service role key
-   - `OPENAI_API_KEY` - Your OpenAI API key
-   - `JWT_SECRET` - A secure random string for JWT signing
 
-3. **Development with Netlify Dev**
+3. **Start development server**
    ```bash
    npm run dev:netlify
    ```
-   This starts the Netlify development server which includes:
-   - Frontend on `http://localhost:8888`
-   - Serverless functions on `http://localhost:8888/.netlify/functions/api`
+   Access at `http://localhost:8888`
 
-4. **Alternative: Standard Development**
+4. **Alternative: Standard development**
    ```bash
    npm run dev
    ```
-   This runs the original Express server setup for comparison.
+   Frontend: `http://localhost:5173`, API: `http://localhost:3002`
 
-### Build and Deploy
+## 🛠️ Function Details
 
-1. **Build for production**
-   ```bash
-   npm run build:netlify
+The Netlify function (`netlify/functions/api.js`) provides:
+
+### Implemented Endpoints
+- `GET /api/health` - Health check
+- `POST /api/auth/login` - Authentication with demo accounts
+- `POST /api/auth/register` - Returns "not implemented" message
+
+### Features
+- **CommonJS Compatibility**: Works with `"type": "module"` in package.json
+- **Comprehensive CORS**: Handles cross-origin requests properly
+- **Demo Authentication**: JWT-based auth for testing
+- **Detailed Logging**: Console logs for debugging
+- **Error Handling**: Proper HTTP status codes and error messages
+
+## 🚨 Known Issues & Solutions
+
+### 1. Local Netlify Dev Issues
+**Problem**: `netlify dev` may fail to start functions locally  
+**Solution**: Functions work correctly when deployed to actual Netlify infrastructure
+
+### 2. API Endpoints Return 404
+**Problem**: API calls return `404 (Not Found)` errors  
+**Error Example**:
+```
+POST https://your-site.netlify.app/api/auth/login 404 (Not Found)
+```
+**Root Cause**: Missing or incorrect `netlify.toml` configuration at repository root  
+**Solution**:
+1. Ensure there is a `netlify.toml` file at the **repository root** (not just in `netlify-version/`)
+2. The root `netlify.toml` must include `base = "netlify-version"` to tell Netlify where to find the app
+3. After adding the file, commit and push to trigger a new deployment
+4. The repository should have this structure:
+   ```
+   /
+   ├── netlify.toml              ← REQUIRED at root
+   └── netlify-version/
+       ├── netlify/functions/
+       ├── src/
+       └── package.json
    ```
 
-2. **Test locally**
-   ```bash
-   netlify dev
-   ```
+### 3. CORS Errors in Preview Deployments
+**Problem**: Preview deployment gets CORS error when calling production API  
+**Error Example**: 
+```
+Access to fetch at 'https://fluffy-sunburst-4208f5.netlify.app/api/auth/login' 
+from origin 'https://deploy-preview-9--fluffy-sunburst-4208f5.netlify.app' 
+has been blocked by CORS policy
+```
+**Root Cause**: `VITE_API_URL` environment variable is set to production URL, forcing preview deployments to call production API instead of their own API  
+**Solution**: 
+1. Go to Netlify Dashboard → Site Settings → Environment Variables
+2. **Delete** or **unset** the `VITE_API_URL` variable
+3. Redeploy to apply changes
+4. Preview deployments will now use their own API endpoints automatically
 
-3. **Deploy to Netlify**
-   ```bash
-   npm run deploy:netlify
-   ```
-
-### Netlify Configuration
-
-The project includes:
-- `netlify.toml` - Netlify build and deployment configuration
-- `netlify/functions/api.ts` - Main serverless function handling all API routes
-- Updated `package.json` with Netlify-specific scripts and dependencies
-
-## 📊 Key Differences from Vercel Version
-
-### Serverless Functions
-- **Vercel**: Uses `api/index.ts` as a single serverless function entry point
-- **Netlify**: Uses `netlify/functions/api.ts` with similar approach but adapted for Netlify's runtime
-
-### Build Process
-- **Netlify**: Requires explicit function building step (`build:functions`)
-- **Configuration**: Uses `netlify.toml` instead of `vercel.json`
-
-### Development
-- **Netlify Dev**: Provides local serverless function testing environment
-- **Proxy Setup**: Vite config updated to work with Netlify dev server
-
-### Environment Variables
-- Set in Netlify dashboard under Site Settings > Environment Variables
-- Same variables as the original version
-
-## 🔧 Scripts
-
-- `npm run dev:netlify` - Start Netlify development environment
-- `npm run build:netlify` - Build for Netlify deployment
-- `npm run deploy:netlify` - Deploy to Netlify
-- `npm run dev` - Standard development (Express server)
-- `npm run build` - Standard build (for comparison)
+### 4. General CORS Errors
+**Problem**: Cross-origin request blocked  
+**Solution**: Function includes comprehensive CORS headers in responses
 
 ## 📁 Project Structure
-
-The Netlify version maintains the same project structure as the original with additions:
 
 ```
 netlify-version/
 ├── netlify/
 │   └── functions/
-│       ├── api.ts              # Main serverless function
-│       └── tsconfig.json       # TypeScript config for functions
-├── netlify.toml                # Netlify configuration
-├── api/                        # Backend code (same as original)
-├── src/                        # Frontend code (same as original)
-├── supabase/                   # Database migrations (same as original)
+│       ├── api.js              # Main serverless function (CommonJS)
+│       └── package.json        # Forces CommonJS module type
+├── netlify.toml                # Netlify configuration & redirects  
+├── dist/                       # Built frontend files
+├── api/                        # Original backend code
+├── src/                        # Frontend React app
+├── .env                        # Local environment variables
 └── README-NETLIFY.md          # This file
 ```
 
-## 🚨 Important Notes
+## 🧪 Testing Deployment
 
-1. **Cold Starts**: Netlify functions may have cold start delays (5-10 seconds for first request)
-2. **Timeout**: Functions have a 30-second timeout limit (configured in netlify.toml)
-3. **Bundle Size**: The serverless function includes the entire Express app, which may impact cold start times
-4. **Environment**: Uses same environment variables as the original version
+### 1. Test Health Endpoint
+```bash
+curl https://your-site.netlify.app/api/health
+```
 
-## 🛠️ Troubleshooting
+### 2. Test Login
+```bash
+curl -X POST https://your-site.netlify.app/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"child@demo.com","password":"password123"}'
+```
 
-### Common Issues
+### 3. Test Frontend
+Visit `https://your-site.netlify.app/login` and use demo credentials
 
-1. **Function Build Errors**
-   - Check `netlify/functions/tsconfig.json` configuration
-   - Ensure all dependencies are properly installed
-   - Run `npm run build:functions` to test function compilation
+## 🎯 Next Steps
 
-2. **API Routes Not Working**
-   - Verify `netlify.toml` redirects are correct
-   - Check function logs in Netlify dashboard
-   - Test with `netlify dev` locally
+1. **Replace Demo Auth**: Integrate with real Supabase authentication
+2. **Add More Endpoints**: Implement remaining API routes from original app
+3. **Environment Variables**: Set production values in Netlify Dashboard
+4. **Monitor Logs**: Check function logs in Netlify Dashboard for issues
 
-3. **Environment Variables**
-   - Set in Netlify dashboard, not in `.env` for production
-   - Use same variable names as original version
+## 📚 Support
 
-4. **Build Failures**
-   - Check Node.js version (should be 18+)
-   - Verify all dependencies are compatible with Netlify runtime
-
-## 📚 Documentation
-
-For more information about the application features and API, refer to the main README.md file in the project root.
-
-## 🤝 Support
-
-This Netlify version maintains full compatibility with the original application features. If you encounter deployment-specific issues, check the Netlify documentation or contact the development team.
+- **Netlify Docs**: https://docs.netlify.com/functions/
+- **Application Issues**: Check main README.md for application-specific help
+- **Deployment Issues**: Check Netlify function logs and build logs
