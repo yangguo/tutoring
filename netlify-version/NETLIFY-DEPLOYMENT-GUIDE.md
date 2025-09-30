@@ -27,18 +27,27 @@
 
 ## Production Deployment
 
+### Important: Repository Structure
+
+This repository has a `netlify.toml` file at the root that configures Netlify to use the `netlify-version` directory as the base directory. This is **critical** for the deployment to work correctly.
+
+If you don't have the root `netlify.toml` file, the deployment will fail with 404 errors on API endpoints.
+
 ### Option 1: Netlify Dashboard (Recommended)
 
 1. **Connect Repository**
    - Go to https://app.netlify.com/
    - Click "New site from Git"
    - Connect your GitHub/GitLab repository
-   - Select the `netlify-version` directory as the base directory (if not using the root)
+   - **Important**: Do NOT manually set a base directory - the `netlify.toml` at the repository root handles this automatically
 
 2. **Build Settings**
-   - Build command: `npm run build:netlify`
-   - Publish directory: `dist`
-   - Functions directory: `netlify/functions`
+   - The `netlify.toml` file configures:
+     - Base directory: `netlify-version`
+     - Build command: `npm run build:netlify`
+     - Publish directory: `dist`
+     - Functions directory: `netlify/functions`
+   - You can leave these fields empty in the Netlify dashboard
 
 3. **Environment Variables**
    Go to Site Settings > Environment Variables and add:

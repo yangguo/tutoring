@@ -15,6 +15,11 @@ This is the Netlify deployment version of the Interactive English Tutor web appl
 
 ## 🛠️ Deployment Instructions
 
+### Prerequisites
+**CRITICAL**: This repository requires a `netlify.toml` file at the **repository root** that configures the base directory to `netlify-version`. Without this file, deployments will fail with 404 errors on API endpoints.
+
+The root `netlify.toml` has been added and should be committed to your repository.
+
 ### 1. Environment Variables Setup
 Set these in your Netlify Dashboard (Site Settings > Environment Variables):
 
@@ -40,8 +45,12 @@ If you set `VITE_API_URL` to a specific URL, all deployments will try to use tha
 
 ### 2. Deploy to Netlify
 1. Connect your GitHub repository to Netlify
-2. Set build command: `npm run build:netlify`
-3. Set publish directory: `dist`
+2. The `netlify.toml` at the repository root automatically configures:
+   - Base directory: `netlify-version`
+   - Build command: `npm run build:netlify`
+   - Publish directory: `dist`
+   - Functions directory: `netlify/functions`
+3. You can leave build settings empty in Netlify dashboard - `netlify.toml` handles everything
 4. Deploy
 
 ### 3. Test the Deployment
@@ -113,12 +122,26 @@ The Netlify function (`netlify/functions/api.js`) provides:
 **Problem**: `netlify dev` may fail to start functions locally  
 **Solution**: Functions work correctly when deployed to actual Netlify infrastructure
 
-### 2. "Function not found" Errors
-**Problem**: API calls return 404  
-**Solutions**:
-- Check that environment variables are set in Netlify Dashboard
-- Verify netlify.toml redirects are correct
-- Ensure function deploys without errors
+### 2. API Endpoints Return 404
+**Problem**: API calls return `404 (Not Found)` errors  
+**Error Example**:
+```
+POST https://your-site.netlify.app/api/auth/login 404 (Not Found)
+```
+**Root Cause**: Missing or incorrect `netlify.toml` configuration at repository root  
+**Solution**:
+1. Ensure there is a `netlify.toml` file at the **repository root** (not just in `netlify-version/`)
+2. The root `netlify.toml` must include `base = "netlify-version"` to tell Netlify where to find the app
+3. After adding the file, commit and push to trigger a new deployment
+4. The repository should have this structure:
+   ```
+   /
+   ├── netlify.toml              ← REQUIRED at root
+   └── netlify-version/
+       ├── netlify/functions/
+       ├── src/
+       └── package.json
+   ```
 
 ### 3. CORS Errors in Preview Deployments
 **Problem**: Preview deployment gets CORS error when calling production API  

@@ -40,17 +40,28 @@ Setting `VITE_API_URL` to any value will force ALL deployments to use that URL, 
 - Updated `package.json` to skip problematic TypeScript API compilation
 - Ensured frontend builds correctly without backend dependencies
 - Maintained Netlify redirects in `netlify.toml`
+- **Added `netlify.toml` at repository root** to configure base directory
+
+### 4. Repository Structure Configuration
+Added `netlify.toml` at the repository root to tell Netlify to use the `netlify-version` directory. This is critical because:
+- The repository has the app code in a subdirectory (`netlify-version/`)
+- Without the root config, Netlify deploys from the wrong location
+- This causes 404 errors on all API endpoints
 
 ## Deployment Instructions
+
+### Prerequisites
+**IMPORTANT**: Ensure the `netlify.toml` file exists at the repository root. Without it, API calls will fail with 404 errors.
 
 ### For Current Site (fluffy-sunburst-4208f5.netlify.app)
 1. **Set Environment Variables** in Netlify Dashboard:
    - Go to Site Settings > Environment Variables
    - Add all variables from the template above
    - Use real Supabase credentials for production
+   - **DO NOT** set `VITE_API_URL` (leave it unset/undefined)
 
 2. **Trigger Rebuild**:
-   - Push the updated code to your repository
+   - Push the updated code to your repository (including the root `netlify.toml`)
    - Netlify will automatically rebuild with the fixed function
 
 3. **Test Login**:
@@ -78,7 +89,23 @@ Setting `VITE_API_URL` to any value will force ALL deployments to use that URL, 
 
 ### Common Issues
 
-#### 1. Preview Deployment CORS Error
+#### 1. API Endpoints Return 404 Error
+**Symptoms**:
+```
+POST https://your-site.netlify.app/api/auth/login 404 (Not Found)
+Failed to load resource: the server responded with a status of 404
+```
+
+**Cause**: The `netlify.toml` file is missing from the repository root, or Netlify is deploying from the wrong directory
+
+**Fix**:
+1. Ensure `netlify.toml` exists at the **repository root** (not just in `netlify-version/`)
+2. The file must contain `base = "netlify-version"` in the `[build]` section
+3. Commit and push the root `netlify.toml` file
+4. Trigger a new deploy with "Clear cache and deploy site"
+5. Check build logs to confirm Netlify is using the correct base directory
+
+#### 2. Preview Deployment CORS Error
 **Symptoms**:
 ```
 Access to fetch at 'https://fluffy-sunburst-4208f5.netlify.app/api/auth/login' 
@@ -94,7 +121,7 @@ has been blocked by CORS policy
 3. Trigger a new deploy
 4. Preview deployments will now use their own API endpoint
 
-#### 2. General Debugging
+#### 3. General Debugging
 1. **Function Logs**: Check Netlify Dashboard > Functions > View logs
 2. **Build Logs**: Check Netlify Dashboard > Deploys > Build log
 3. **Browser Console**: Check for JavaScript errors or network failures
@@ -111,6 +138,10 @@ has been blocked by CORS policy
 - `netlify/functions/package.json` - Added for module type override
 - `.env` - Created with demo configuration
 - `package.json` - Updated build process
+- `netlify.toml` - **Added at repository root** to configure base directory
+- `README-NETLIFY.md` - Updated documentation
+- `NETLIFY-DEPLOYMENT-GUIDE.md` - Added troubleshooting for 404 errors
+- `NETLIFY-LOGIN-FIX.md` - This file, with complete fix documentation
 - `README-NETLIFY.md` - Updated documentation
 
 This fix resolves the network error issue and provides a working authentication system for the Netlify deployment.
