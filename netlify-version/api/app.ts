@@ -37,14 +37,7 @@ const app: express.Application = express();
 // Security middleware
 app.use(helmet());
 
-const netlifyEnv = process.env.NETLIFY === 'true' || process.env.NETLIFY_DEV === 'true' || process.env.NETLIFY_LOCAL === 'true';
-const apiBasePathSet = new Set(['/api', '/.netlify/functions/api']);
-
-if (netlifyEnv) {
-  apiBasePathSet.add('/');
-}
-
-const apiBasePaths = Array.from(apiBasePathSet);
+const apiBasePaths = ['/api', '/.netlify/functions/api'] as const;
 
 // Rate limiting
 const limiter = rateLimit({
@@ -57,7 +50,7 @@ const limiter = rateLimit({
   }
 });
 for (const basePath of apiBasePaths) {
-  const limiterPath = basePath === '/' ? '/' : `${basePath}/`;
+  const limiterPath = basePath.endsWith('/') ? basePath : `${basePath}/`;
   app.use(limiterPath, limiter);
 }
 
@@ -76,8 +69,6 @@ app.use(cors({
       ], // Development origins
   credentials: true
 }));
-
-// Body parsing middleware
 
 // Body parsing middleware
 app.use(express.json({ limit: '50mb' }));
