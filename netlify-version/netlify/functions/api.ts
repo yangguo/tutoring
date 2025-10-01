@@ -27,6 +27,30 @@ type NetlifyHandler = (
 
 const expressHandler = serverlessHttp(app) as unknown as NetlifyHandler;
 
+const getHeaderValue = (headers: Record<string, string | string[]> | undefined, key: string): string | undefined => {
+  if (!headers) return undefined;
+  const value = headers[key] ?? headers[key.toLowerCase()];
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+};
+
+const logIncomingEvent = (event: HandlerEvent): void => {
+  try {
+    const requestId = getHeaderValue(event.headers, 'x-nf-request-id') ?? getHeaderValue(event.headers, 'x-request-id');
+    const url = event.rawUrl ?? event.path ?? 'unknown';
+    console.info('[netlify][api] incoming request', {
+      method: event.httpMethod,
+      url,
+      requestId,
+      hasBody: typeof event.body === 'string' && event.body.length > 0,
+    });
+  } catch (loggingError) {
+    console.warn('[netlify][api] failed to log request', loggingError);
+  }
+};
+
 const withCors = (response: HandlerResponse): HandlerResponse => {
   const headers: Record<string, string> = {};
 
@@ -51,6 +75,8 @@ const withCors = (response: HandlerResponse): HandlerResponse => {
 };
 
 export const handler = async (event: HandlerEvent, context: HandlerContext): Promise<HandlerResponse> => {
+  logIncomingEvent(event);
+
   if (event.httpMethod === 'OPTIONS') {
     return withCors({
       statusCode: 200,

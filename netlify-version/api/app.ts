@@ -74,6 +74,21 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
+// Lightweight request logging to help debug serverless deployments
+app.use((req: Request, _res: Response, next: NextFunction) => {
+  const requestIdHeader = req.headers['x-nf-request-id'] ?? req.headers['x-request-id'];
+  const requestId = Array.isArray(requestIdHeader) ? requestIdHeader[0] : requestIdHeader;
+  console.info('[api][request]', {
+    method: req.method,
+    originalUrl: req.originalUrl,
+    baseUrl: req.baseUrl,
+    path: req.path,
+    host: req.headers.host,
+    requestId,
+  });
+  next();
+});
+
 // Request timeout middleware for uploads
 const extendUploadTimeout = (req: Request, res: Response, next: NextFunction): void => {
   // Set longer timeout for upload requests (5 minutes)
@@ -213,6 +228,12 @@ app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
  * 404 handler
  */
 app.use((req: Request, res: Response) => {
+  console.warn('[api][404]', {
+    method: req.method,
+    originalUrl: req.originalUrl,
+    baseUrl: req.baseUrl,
+    path: req.path,
+  });
   res.status(404).json({
     success: false,
     error: 'API not found',
