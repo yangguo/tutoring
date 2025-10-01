@@ -14,6 +14,197 @@ import speakingPracticeChatHandler from './chat/speaking-practice.js';
 
 const router = Router();
 
+const INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10MB safety limit for inline images
+const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 180_000; // 3 minutes for potentially slower APIs
+
+async function getInlineImageUrl(imageUrl: string): Promise<string | null> {
+  try {
+    const response = await fetch(imageUrl);
+
+    if (!response.ok) {
+      console.warn('Failed to fetch image for OpenAI request', imageUrl, response.status, response.statusText);
+      return null;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+
+    if (!arrayBuffer.byteLength) {
+      console.warn('Fetched image is empty, skipping inline conversion', imageUrl);
+      return null;
+    }
+
+    if (arrayBuffer.byteLength > INLINE_IMAGE_MAX_BYTES) {
+      console.warn('Fetched image exceeds inline size limit, falling back to public URL', imageUrl);
+      return null;
+    }
+
+    const contentType = response.headers.get('content-type') ?? 'image/png';
+    const base64 = Buffer.from(arrayBuffer).toString('base64');
+
+    return `data:${contentType};base64,${base64}`;
+  } catch (error) {
+    console.warn('Unable to inline image for OpenAI request', imageUrl, error instanceof Error ? error.message : String(error));
+    return null;
+  }
+}
+
+function hasValidOpenAIConfig(): boolean {
+  return Boolean(
+    process.env.OPENAI_BASE_URL &&
+    process.env.OPENAI_API_KEY &&
+    process.env.OPENAI_API_KEY !== 'your-openai-api-key-here' &&
+    (process.env.OPENAI_API_KEY?.length ?? 0) >= 10
+  );
+}
+
+function clamp01(value: unknown, fallback = 0): number {
+  const num = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
+  if (!Number.isFinite(num)) {
+    return fallback;
+  }
+  if (num < 0) return 0;
+  if (num > 1) return 1;
+  return Number(num.toFixed(4));
+}
+
+type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced' | 'challenging';
+
+function normalizeDifficulty(value: unknown): DifficultyLevel {
+  if (typeof value !== 'string') return 'challenging';
+  const normalized = value.toLowerCase();
+  if (['beginner', 'intermediate', 'advanced', 'challenging'].includes(normalized)) {
+    return normalized as DifficultyLevel;
+  }
+  if (['easy'].includes(normalized)) return 'beginner';
+  if (['medium', 'moderate'].includes(normalized)) return 'intermediate';
+  if (['hard', 'difficult'].includes(normalized)) return 'advanced';
+  return 'challenging';
+}
+
+interface FallbackGlossaryEntry {
+  word: string;
+  definition: string;
+  translation: string;
+  difficulty: DifficultyLevel;
+  confidence: number;
+  position: { top: number; left: number; width: number; height: number };
+  metadata?: Record<string, unknown>;
+}
+
+function createFallbackPosition(index: number, total: number) {
+  if (total <= 0) {
+    return { top: 0.1, left: 0.1, width: 0.2, height: 0.1 };
+  }
+
+  const columns = Math.ceil(Math.sqrt(total));
+  const rows = Math.ceil(total / columns);
+  const row = Math.floor(index / columns);
+  const column = index % columns;
+
+  const width = 0.18;
+  const height = 0.1;
+
+  const horizontalGap = columns > 1 ? (1 - width) / (columns - 1 || 1) : 0;
+  const verticalGap = rows > 1 ? (1 - height) / (rows - 1 || 1) : 0;
+
+  const left = clamp01(column * horizontalGap);
+  const top = clamp01(row * verticalGap + 0.05);
+
+  return { top, left, width, height };
+}
+
+function generateFallbackGlossaryFromText(text: string | null | undefined, maxEntries = 6): FallbackGlossaryEntry[] {
+  if (!text) return [];
+
+  const sanitized = text.toLowerCase().replace(/[^a-z\s-]/g, ' ');
+  const words = sanitized.split(/\s+/).filter(Boolean);
+  const seen = new Set<string>();
+  const stopWords = new Set([
+    'the', 'and', 'with', 'from', 'they', 'have', 'this', 'that', 'were', 'said',
+    'each', 'which', 'their', 'time', 'will', 'about', 'would', 'there', 'could',
+    'other', 'more', 'very', 'what', 'know', 'just', 'into', 'over', 'also', 'your',
+    'work', 'life', 'only', 'still', 'should', 'after', 'being', 'before', 'through',
+    'when', 'where', 'some', 'then', 'them', 'well', 'once'
+  ]);
+
+  const candidates: string[] = [];
+  for (const word of words) {
+    if (word.length < 5) continue;
+    if (stopWords.has(word)) continue;
+    if (seen.has(word)) continue;
+    seen.add(word);
+    candidates.push(word);
+    if (candidates.length >= maxEntries) break;
+  }
+
+  return candidates.map((word, index) => ({
+    word,
+    definition: `Definition for "${word}" is not available in offline mode.`,
+    translation: `${word}（待翻译）`,
+    difficulty: word.length > 8 ? 'advanced' : 'challenging',
+    confidence: 0.35,
+    position: createFallbackPosition(index, candidates.length),
+    metadata: { source: 'fallback-text', note: 'Generated without AI vision OCR' }
+  }));
+}
+
+
+
+function attemptRepairJsonResponse(rawContent: string): string | null {
+  if (!rawContent) return null;
+
+  let candidate = rawContent.replace(/```json|```/g, '').trim();
+  if (!candidate) return null;
+
+  console.log('Attempting to repair JSON response, original length:', rawContent.length);
+  console.log('Candidate after cleanup, length:', candidate.length);
+
+  // If there's trailing partially-written text after the last closing brace, trim it off.
+  const lastClosingBrace = candidate.lastIndexOf('}');
+  if (lastClosingBrace !== -1 && lastClosingBrace < candidate.length - 1) {
+    const trimmed = candidate.slice(0, lastClosingBrace + 1);
+    console.log('Trimmed trailing text after last closing brace, new length:', trimmed.length);
+    candidate = trimmed;
+  }
+
+  candidate = candidate.replace(/\s+$/, '');
+
+  const countChar = (text: string, char: string) => (text.match(new RegExp(char, 'g')) ?? []).length;
+
+  let openSquares = countChar(candidate, '\\[');
+  let closeSquares = countChar(candidate, '\\]');
+  let openCurlies = countChar(candidate, '{');
+  let closeCurlies = countChar(candidate, '}');
+
+  console.log('Bracket counts - Open squares:', openSquares, 'Close squares:', closeSquares, 'Open curlies:', openCurlies, 'Close curlies:', closeCurlies);
+
+  while (closeSquares < openSquares) {
+    candidate += ']';
+    closeSquares += 1;
+  }
+
+  while (closeCurlies < openCurlies) {
+    candidate += '}';
+    closeCurlies += 1;
+  }
+
+  if (openSquares !== closeSquares || openCurlies !== closeCurlies) {
+    console.log('Added missing brackets - Final length:', candidate.length);
+  }
+
+  try {
+    JSON.parse(candidate);
+    console.log('Successfully repaired JSON response');
+    return candidate;
+  } catch (repairError) {
+    console.error('Failed to repair AI JSON response:', repairError);
+    console.log('Failed candidate preview:', candidate.slice(-200)); // Show last 200 chars
+    return null;
+  }
+}
+
+
+
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // Achievements Routes
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -670,6 +861,48 @@ router.get('/books', async (req: Request, res: Response): Promise<void> => {
   }
 });
 
+router.get('/books/discussions', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { userId } = (req as any).user;
+    const { book_id, page = 1, limit = 20 } = req.query;
+    
+    const offset = (Number(page) - 1) * Number(limit);
+
+    let query = supabase
+      .from('book_discussions')
+      .select (
+        `*,
+        books (
+          id,
+          title
+        )`
+      )
+      .eq('user_id', userId);
+
+    if (book_id) {
+      query = query.eq('book_id', book_id);
+    }
+
+    const { data: discussions, error } = await query
+      .order('created_at', { ascending: false })
+      .range(offset, offset + Number(limit) - 1);
+
+    if (error) {
+      res.status(500).json({ error: 'Failed to fetch discussions' });
+      return;
+    }
+
+    res.json({
+      discussions: discussions || [],
+      page: Number(page),
+      limit: Number(limit)
+    });
+  } catch (error) {
+    console.error('Get discussions error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get('/books/:bookId', async (req: Request, res: Response): Promise<void> => {
   try {
     const { bookId } = req.params;
@@ -1216,109 +1449,173 @@ router.post('/books/analyze-image', authenticateToken, async (req: Request, res:
       return;
     }
 
-    // Enhanced image analysis using OpenAI GPT-4 Vision
-    let openaiResponse;
-    try {
-      // Check if OpenAI configuration is available and valid
-      if (!process.env.OPENAI_BASE_URL || 
-          !process.env.OPENAI_API_KEY || 
-          process.env.OPENAI_API_KEY === 'your-openai-api-key-here' ||
-          process.env.OPENAI_API_KEY.length < 10) {
-        console.warn('OpenAI configuration missing or invalid, falling back to basic description');
-        const basicDescription = generateBasicImageDescription(image_url, context);
-        res.json({ description: basicDescription, vocabulary: [] });
-        return;
-      }
+    // Enhanced image analysis using OpenAI Vision models
+    const fallbackAnalysis = () => ({
+      description: generateBasicImageDescription(image_url, context),
+      vocabulary: []
+    });
 
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout for vision API
-      
+    let analysisResult: { description: string; vocabulary: Array<any> } | null = null;
+    let usedFallback = false;
+    const fallbackReasons: string[] = [];
+
+    const ensureFallback = (reason: string) => {
+      fallbackReasons.push(reason);
+      console.warn(reason);
+      if (!usedFallback) {
+        usedFallback = true;
+        analysisResult = fallbackAnalysis();
+      }
+    };
+
+    const openAiAvailable = hasValidOpenAIConfig();
+
+    if (!openAiAvailable) {
+      ensureFallback('OpenAI configuration missing or invalid, using basic image description.');
+    } else {
       try {
-        openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'gpt-4-vision-preview',
-            messages: [
-              {
-                role: 'system',
-                content: 'You are an educational assistant for children learning English. Analyze the image and provide an age-appropriate, educational description. Also extract 3-5 key vocabulary words that children can learn from this image. Return a JSON response with "description" (string) and "vocabulary" (array of objects with "word", "definition", and "difficulty_level" fields).'
-              },
-              {
-                role: 'user',
-                content: [
-                  {
-                    type: 'text',
-                    text: `Please analyze this image from a children's book. Context: ${context || 'General children\'s book illustration'}. Provide an educational description suitable for children aged 3-12, and identify key vocabulary words they can learn.`
-                  },
-                  {
-                    type: 'image_url',
-                    image_url: {
-                      url: image_url,
-                      detail: 'high'
+        const controller = new AbortController();
+        const visionTimeoutRaw = process.env.OPENAI_VISION_TIMEOUT_MS;
+        const parsedTimeout = visionTimeoutRaw ? Number.parseInt(visionTimeoutRaw, 10) : Number.NaN;
+        const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0
+          ? parsedTimeout
+          : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
+
+        const openaiVisionModel = process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo';
+        const inlineImageUrl = await getInlineImageUrl(image_url);
+        const openaiImageSource = inlineImageUrl ?? image_url;
+
+        const startTime = Date.now();
+        const timeoutId = setTimeout(() => {
+          const elapsed = Date.now() - startTime;
+          console.warn(`OpenAI Vision API timeout after ${elapsed}ms (limit: ${timeoutMs}ms)`);
+          controller.abort();
+        }, timeoutMs);
+
+        try {
+          const openaiResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: openaiVisionModel,
+              messages: [
+                {
+                  role: 'system',
+                  content: 'You are an educational assistant for children learning English. Provide a detailed, age-appropriate description for this book page.'
+                },
+                {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Please describe this children\'s book page image clearly and engagingly. Focus on characters, actions, setting, and any educational details.'
+                    },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: openaiImageSource,
+                        detail: inlineImageUrl ? undefined : 'auto'
+                      }
                     }
-                  }
-                ]
+                  ]
+                }
+              ],
+              max_tokens: 512,
+              temperature: 0.3
+            }),
+            signal: controller.signal
+          });
+
+          const elapsed = Date.now() - startTime;
+          console.log(`OpenAI Vision API request completed in ${elapsed}ms`);
+          clearTimeout(timeoutId);
+
+          if (!openaiResponse.ok) {
+            console.error('OpenAI Vision API error:', await openaiResponse.text());
+            ensureFallback('OpenAI Vision API returned a non-200 response.');
+          } else {
+            const openaiResult = await openaiResponse.json();
+            const rawContent = openaiResult.choices?.[0]?.message?.content;
+
+            const extractContentString = (content: unknown): string | null => {
+              if (!content) return null;
+              if (typeof content === 'string') return content;
+              if (Array.isArray(content)) {
+                return content
+                  .map(part => {
+                    if (typeof part === 'string') return part;
+                    if (typeof part === 'object' && part && 'text' in part) {
+                      return String((part as { text?: string }).text ?? '');
+                    }
+                    return '';
+                  })
+                  .join('\n')
+                  .trim() || null;
               }
-            ],
-            max_tokens: 800,
-            temperature: 0.3
-          }),
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-      } catch (abortError) {
-        clearTimeout(timeoutId);
-        throw abortError;
-      }
-    } catch (fetchError) {
-      console.error('OpenAI Vision API fetch error:', fetchError);
-      // Fallback to basic description on network error
-      const basicDescription = generateBasicImageDescription(image_url, context);
-      res.json({ description: basicDescription, vocabulary: [] });
-      return;
-    }
+              return null;
+            };
 
-    if (!openaiResponse.ok) {
-      console.error('OpenAI Vision API error:', await openaiResponse.text());
-      // Fallback to basic description
-      const basicDescription = generateBasicImageDescription(image_url, context);
-      res.json({ description: basicDescription, vocabulary: [] });
-      return;
-    }
+            const cleanedContent = extractContentString(rawContent)
+              ?.replace(/```json|```/g, '')
+              .trim();
 
-    const openaiResult = await openaiResponse.json();
-    const aiContent = openaiResult.choices[0]?.message?.content;
-
-    try {
-      const analysis = JSON.parse(aiContent);
-      
-      // Update page with image description if page_id provided
-      if (page_id) {
-        const { error: updateError } = await supabase
-          .from('book_pages')
-          .update({ image_description: analysis.description })
-          .eq('id', page_id);
-
-        if (updateError) {
-          console.error('Failed to update page with image description:', updateError);
+            if (!cleanedContent) {
+              console.error('OpenAI Vision response did not contain content.');
+              ensureFallback('OpenAI Vision response missing content.');
+            } else {
+              const detailedDescription = cleanedContent.trim();
+              if (!detailedDescription) {
+                ensureFallback('OpenAI Vision description was empty after trimming.');
+              } else {
+                analysisResult = {
+                  description: detailedDescription,
+                  vocabulary: []
+                };
+              }
+            }
+          }
+        } catch (fetchError) {
+          const elapsed = Date.now() - startTime;
+          console.error(`OpenAI Vision API aborted after ${elapsed}ms:`, fetchError);
+          clearTimeout(timeoutId);
+          if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+            console.error('This error occurred due to request timeout. Consider increasing OPENAI_VISION_TIMEOUT_MS environment variable.');
+          }
+          ensureFallback('OpenAI Vision API request failed.');
         }
+      } catch (error) {
+        console.error('Unexpected error while performing OpenAI analysis:', error);
+        ensureFallback('Unexpected error during OpenAI analysis.');
       }
-
-      res.json({
-        description: analysis.description || 'This image shows an interesting scene from the story.',
-        vocabulary: analysis.vocabulary || [],
-        updated_page: !!page_id
-      });
-    } catch (parseError) {
-      console.error('Failed to parse AI response:', parseError);
-      // Fallback to basic description if AI response is not valid JSON
-      const basicDescription = generateBasicImageDescription(image_url, context);
-      res.json({ description: basicDescription, vocabulary: [] });
     }
+
+    if (!analysisResult) {
+      ensureFallback('OpenAI analysis did not produce a result.');
+    }
+
+    const { description, vocabulary } = analysisResult!;
+
+    if (page_id && description) {
+      const { error: updateError } = await supabase
+        .from('book_pages')
+        .update({ image_description: description })
+        .eq('id', page_id);
+
+      if (updateError) {
+        console.error('Failed to update page with image description:', updateError);
+      }
+    }
+
+    res.json({
+      description,
+      vocabulary,
+      updated_page: !!page_id,
+      used_fallback: usedFallback,
+      fallback_reasons: usedFallback ? fallbackReasons : []
+    });
   } catch (error) {
     console.error('Image analysis error:', error);
     // Fallback to basic description
@@ -1326,6 +1623,343 @@ router.post('/books/analyze-image', authenticateToken, async (req: Request, res:
     res.json({ description: basicDescription, vocabulary: [] });
   }
 });
+
+router.get('/books/pages/:pageId/glossary', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { pageId } = req.params;
+
+    const { data, error } = await supabase
+      .from('page_glossary_entries')
+      .select('*')
+      .eq('page_id', pageId)
+      .order('confidence', { ascending: false })
+      .order('word', { ascending: true });
+
+    if (error) {
+      console.error('Failed to fetch page glossary entries:', error);
+      res.status(500).json({ error: 'Failed to fetch glossary entries' });
+      return;
+    }
+
+    res.json({ entries: data ?? [] });
+  } catch (error) {
+    console.error('Unexpected glossary fetch error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post(
+  '/books/pages/:pageId/glossary/analyze',
+  authenticateToken,
+  requireRole(['parent', 'admin']),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { pageId } = req.params;
+      const { max_entries = 6, refresh = true } = req.body ?? {};
+      const requester = (req as any).user as { userId: string; role: string } | undefined;
+
+      if (!requester || !requester.userId) {
+        res.status(401).json({ error: 'Authentication required' });
+        return;
+      }
+
+      const { data: page, error: pageError } = await supabase
+        .from('book_pages')
+        .select('id, book_id, page_number, image_url, text_content')
+        .eq('id', pageId)
+        .single();
+
+      if (pageError || !page) {
+        res.status(404).json({ error: 'Book page not found' });
+        return;
+      }
+
+      if (!page.image_url) {
+        res.status(400).json({ error: 'Page is missing an image to analyze' });
+        return;
+      }
+
+      const { data: book, error: bookError } = await supabase
+        .from('books')
+        .select('id, title, difficulty_level, target_age_min, target_age_max')
+        .eq('id', page.book_id)
+        .single();
+
+      if (bookError || !book) {
+        res.status(404).json({ error: 'Book not found for the requested page' });
+        return;
+      }
+
+      const openAiAvailable = hasValidOpenAIConfig();
+      const inlineImageUrl = openAiAvailable ? await getInlineImageUrl(page.image_url) : null;
+      const imageSource = inlineImageUrl ?? page.image_url;
+
+      interface AiGlossaryEntry {
+        word: string;
+        definition: string;
+        translation: string;
+        difficulty?: string;
+        confidence?: number;
+        bounding_box?: { top?: number; left?: number; width?: number; height?: number };
+        notes?: string;
+      }
+
+      let aiEntries: AiGlossaryEntry[] = [];
+      const metadata: Record<string, unknown> = {
+        book_title: book.title,
+        page_number: page.page_number,
+        inline_image_used: Boolean(inlineImageUrl)
+      };
+
+      if (openAiAvailable) {
+        const controller = new AbortController();
+        const timeoutRaw = process.env.OPENAI_VISION_TIMEOUT_MS;
+        const glossaryTimeoutRaw = process.env.OPENAI_GLOSSARY_TIMEOUT_MS;
+        const parsedTimeout = timeoutRaw ? Number.parseInt(timeoutRaw, 10) : Number.NaN;
+        const parsedGlossaryTimeout = glossaryTimeoutRaw ? Number.parseInt(glossaryTimeoutRaw, 10) : Number.NaN;
+        // Use a longer timeout for glossary analysis as it's more complex than other vision tasks
+        const baseTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
+        const glossaryTimeoutMs = Number.isFinite(parsedGlossaryTimeout) && parsedGlossaryTimeout > 0 ? parsedGlossaryTimeout : 300_000;
+        const timeoutMs = Math.max(baseTimeoutMs, glossaryTimeoutMs); // Configurable minimum for glossary analysis
+
+        const visionModel = process.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
+
+        const promptInstruction = `You are assisting a parent who supports an English learner at the primary school level. ` +
+          `Analyze the provided book page image and identify up to ${max_entries} English words or short phrases that a primary school student might find challenging. ` +
+          `You must respond with a single JSON object matching this schema: { "entries": [ { "word": string, ` +
+          `"definition": string, "translation": string, "difficulty": "beginner" | "intermediate" | "advanced" | "challenging", ` +
+          `"confidence": number between 0 and 1, "bounding_box": { "top": number, "left": number, "width": number, "height": number }, "notes"?: string } ] }. ` +
+          `IMPORTANT: All bounding_box coordinates must be normalized between 0 and 1 relative to the image dimensions. ` +
+          `For example, if a word is at the top-left corner, use top: 0, left: 0. If at bottom-right, use top: 0.9, left: 0.9. ` +
+          `Width and height should also be normalized (e.g., width: 0.1 means 10% of image width). ` +
+          `All floating point numbers must use a dot decimal (.) and at most three decimals. Do not include any explanatory text before or after the JSON.`;
+
+        const messages = [
+          {
+            role: 'system',
+            content: 'You are an expert children\'s reading coach and bilingual assistant.'
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: promptInstruction },
+              {
+                type: 'text',
+                text: `Book: ${book.title}. Difficulty: ${book.difficulty_level}. Target age: ${book.target_age_min}-${book.target_age_max}. Page: ${page.page_number}.`
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: imageSource,
+                  detail: inlineImageUrl ? undefined : 'high'
+                }
+              }
+            ]
+          }
+        ];
+
+        const startTime = Date.now();
+        const timeoutId = setTimeout(() => {
+          controller.abort();
+        }, timeoutMs);
+
+        try {
+          const response = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: visionModel,
+              messages,
+              max_tokens: 1500, // Increased from 700 to allow for complete glossary responses
+              temperature: 0.2,
+              response_format: {
+                type: 'json_object'
+              }
+            }),
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+          const elapsed = Date.now() - startTime;
+          console.log(`Glossary analysis call completed in ${elapsed}ms`);
+
+          if (!response.ok) {
+            console.error('OpenAI glossary analysis error:', await response.text());
+            metadata.api_error = true;
+          } else {
+            const result = await response.json();
+            const message = result.choices?.[0]?.message ?? null;
+            let structuredPayload: unknown = null;
+
+            if (message && message.content) {
+              console.log('Raw AI response content length:', message.content.length);
+              console.log('Raw AI response content preview:', message.content.substring(0, 200));
+              
+              // Check if the response seems complete (should end with proper JSON structure)
+              const content = message.content.trim();
+              if (!content.endsWith('}') && !content.endsWith(']}')) {
+                console.log('Response appears to be incomplete - missing closing braces');
+                console.log('Response ends with:', content.slice(-50)); // Show last 50 chars
+                metadata.incomplete_response = true;
+              }
+              
+              try {
+                structuredPayload = JSON.parse(message.content);
+              } catch (parseError) {
+                console.error('Unable to parse glossary AI response:', parseError);
+                console.log('Failed content:', message.content);
+                metadata.json_parse_error = true;
+                
+                // Attempt to clean up the string if parsing fails
+                const cleanedContent = message.content.replace(/```json|```/g, '').trim();
+                console.log('Cleaned content preview:', cleanedContent.substring(0, 200));
+                
+              try {
+                  structuredPayload = JSON.parse(cleanedContent);
+                  console.log('Successfully parsed cleaned content');
+              } catch (finalParseError) {
+                  console.error('Unable to parse cleaned glossary AI response:', finalParseError);
+                  console.log('Final failed content:', cleanedContent);
+                  metadata.final_parse_error = true;
+
+                  const repaired = attemptRepairJsonResponse(cleanedContent);
+                  if (repaired) {
+                    try {
+                      structuredPayload = JSON.parse(repaired);
+                      metadata.repaired_response = true;
+                      console.log('Successfully repaired and parsed AI response');
+                    } catch (repairParseError) {
+                      console.error('Repaired AI response still failed to parse:', repairParseError);
+                    }
+                  }
+                }
+              }
+          } else {
+            console.log('No message content received from AI response');
+            console.log('Full result:', JSON.stringify(result, null, 2));
+            metadata.no_content = true;
+          }
+
+            const maybeEntries = structuredPayload && Array.isArray((structuredPayload as any).entries)
+              ? (structuredPayload as any).entries
+              : Array.isArray(structuredPayload)
+                ? structuredPayload
+                : [];
+
+            if (Array.isArray(maybeEntries) && maybeEntries.length > 0) {
+              aiEntries = maybeEntries
+                .map((entry: any) => ({
+                  word: typeof entry?.word === 'string' ? entry.word.trim() : '',
+                  definition: typeof entry?.definition === 'string' ? entry.definition.trim() : '',
+                  translation: typeof entry?.translation === 'string' ? entry.translation.trim() : '',
+                  difficulty: entry?.difficulty,
+                  confidence: entry?.confidence,
+                  bounding_box: entry?.bounding_box,
+                  notes: typeof entry?.notes === 'string' ? entry.notes : undefined
+                }))
+                .filter(entry => entry.word && entry.definition && entry.translation);
+            }
+          }
+        } catch (error) {
+          clearTimeout(timeoutId);
+          console.error('Glossary analysis request failed:', error);
+          
+          // Check if the error was due to timeout/abort
+          if (error instanceof Error && error.name === 'AbortError') {
+            console.log('Request was aborted due to timeout');
+            metadata.timeout_occurred = true;
+          } else {
+            console.log('Request failed with error:', error);
+            metadata.request_error = error instanceof Error ? error.message : String(error);
+          }
+        }
+      }
+
+      if (!aiEntries.length) {
+        aiEntries = generateFallbackGlossaryFromText(page.text_content, max_entries);
+        metadata.fallback_used = true;
+      }
+
+      if (!aiEntries.length) {
+        res.status(200).json({ message: 'No glossary entries identified', entries: [] });
+        return;
+      }
+
+      if (refresh) {
+        const { error: deleteError } = await supabase
+          .from('page_glossary_entries')
+          .delete()
+          .eq('page_id', pageId);
+
+        if (deleteError) {
+          console.error('Failed to clear previous glossary entries:', deleteError);
+        }
+      }
+
+      const mappedEntries = aiEntries.slice(0, max_entries).map((entry, index) => {
+        const fallbackPosition = createFallbackPosition(index, aiEntries.length);
+
+        const top = entry.bounding_box?.top;
+        const left = entry.bounding_box?.left;
+        const width = entry.bounding_box?.width;
+        const height = entry.bounding_box?.height;
+
+        console.log(`[Glossary Debug] Entry "${entry.word}" raw bounding box:`, { top, left, width, height });
+
+        // Use normalized coordinates directly from AI (0-1 range) with clamping
+        const normalizedPosition = entry.bounding_box ? {
+          top: Math.max(0, Math.min(1, typeof top === 'number' ? top : fallbackPosition.top)),
+          left: Math.max(0, Math.min(1, typeof left === 'number' ? left : fallbackPosition.left)),
+          width: Math.max(0.04, Math.min(1, typeof width === 'number' ? width : 0.18)),
+          height: Math.max(0.04, Math.min(1, typeof height === 'number' ? height : 0.1))
+        } : fallbackPosition;
+
+        console.log(`[Glossary Debug] Entry "${entry.word}" normalized position:`, normalizedPosition);
+
+        return {
+          page_id: pageId,
+          word: entry.word,
+          definition: entry.definition,
+          translation: entry.translation,
+          difficulty: normalizeDifficulty(entry.difficulty),
+          confidence: clamp01(entry.confidence, 0.6),
+          position: normalizedPosition,
+          metadata: {
+            ...metadata,
+            notes: entry.notes,
+            source: openAiAvailable ? 'openai-vision' : 'fallback-text',
+            raw_bounding_box: entry.bounding_box ?? null
+          },
+          created_by: requester.userId
+        };
+      });
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('page_glossary_entries')
+        .insert(mappedEntries)
+        .select('*');
+
+      if (insertError) {
+        console.error('Failed to store glossary entries:', insertError);
+        res.status(500).json({ error: 'Failed to store glossary entries' });
+        return;
+      }
+
+      res.json({
+        message: 'Glossary generated successfully',
+        entries: inserted,
+        used_fallback: metadata.fallback_used === true,
+        total: inserted?.length ?? 0
+      });
+    } catch (error) {
+      console.error('Unexpected glossary analysis error:', error);
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+);
 
 router.post('/books/:bookId/analyze-images', authenticateToken, requireRole(['admin']), async (req: Request, res: Response): Promise<void> => {
   try {
@@ -1693,48 +2327,6 @@ router.post('/books/discuss', authenticateToken, async (req: Request, res: Respo
     });
   } catch (error) {
     console.error('Book discussion error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-router.get('/books/discussions', authenticateToken, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { userId } = (req as any).user;
-    const { book_id, page = 1, limit = 20 } = req.query;
-    
-    const offset = (Number(page) - 1) * Number(limit);
-
-    let query = supabase
-      .from('book_discussions')
-      .select (
-        `*,
-        books (
-          id,
-          title
-        )`
-      )
-      .eq('user_id', userId);
-
-    if (book_id) {
-      query = query.eq('book_id', book_id);
-    }
-
-    const { data: discussions, error } = await query
-      .order('created_at', { ascending: false })
-      .range(offset, offset + Number(limit) - 1);
-
-    if (error) {
-      res.status(500).json({ error: 'Failed to fetch discussions' });
-      return;
-    }
-
-    res.json({
-      discussions: discussions || [],
-      page: Number(page),
-      limit: Number(limit)
-    });
-  } catch (error) {
-    console.error('Get discussions error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -2250,46 +2842,96 @@ router.post('/books/:bookId/pages/:pageId/regenerate-description', authenticateT
 
     // 2. Analyze the image with OpenAI
     let newDescription: string | null = null;
+    let usedFallback = false;
+    const { context } = req.body ?? {};
+
     try {
-      const openaiConfig = process.env.OPENAI_API_KEY ? { apiKey: process.env.OPENAI_API_KEY } : null;
+      if (!process.env.OPENAI_BASE_URL ||
+          !process.env.OPENAI_API_KEY ||
+          process.env.OPENAI_API_KEY === 'your-openai-api-key-here' ||
+          process.env.OPENAI_API_KEY.length < 10) {
+        console.warn('OpenAI configuration missing or invalid during regeneration, falling back to basic description');
+      } else {
+        const controller = new AbortController();
+        const visionTimeoutRaw = process.env.OPENAI_VISION_TIMEOUT_MS;
+        const parsedTimeout = visionTimeoutRaw ? Number.parseInt(visionTimeoutRaw, 10) : Number.NaN;
+        const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0
+          ? parsedTimeout
+          : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
 
-      if (openaiConfig) {
-        const { OpenAI } = await import('openai');
-        const openai = new OpenAI(openaiConfig);
+        const openaiVisionModel = process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo';
+        const inlineImageUrl = await getInlineImageUrl(image_url);
+        const openaiImageSource = inlineImageUrl ?? image_url;
 
-        const response = await openai.chat.completions.create({
-          model: process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo',
-          messages: [
-            {
-              role: "user",
-              content: [
+        const startTime = Date.now();
+        const timeoutId = setTimeout(() => {
+          const elapsed = Date.now() - startTime;
+          console.warn(`OpenAI Vision API timeout during regeneration after ${elapsed}ms (limit: ${timeoutMs}ms)`);
+          controller.abort();
+        }, timeoutMs);
+
+        try {
+          const response = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              model: openaiVisionModel,
+              messages: [
                 {
-                  type: "text",
-                  text: "Analyze this children\'s book page image. Provide a detailed, educational description suitable for English language learners. Focus on objects, characters, actions, and educational content. Keep it age-appropriate and engaging."
+                  role: 'system',
+                  content: 'You are an educational assistant for children learning English. Provide a detailed, age-appropriate description for this book page.'
                 },
                 {
-                  type: "image_url",
-                  image_url: {
-                    url: image_url,
-                  }
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'text',
+                      text: 'Please describe this children\'s book page image clearly and engagingly. Focus on characters, actions, setting, and any educational details.'
+                    },
+                    {
+                      type: 'image_url',
+                      image_url: {
+                        url: openaiImageSource,
+                        detail: inlineImageUrl ? undefined : 'auto'
+                      }
+                    }
+                  ]
                 }
-              ]
-            }
-          ],
-          max_tokens: 1024
-        });
-        
-        newDescription = response.choices[0]?.message?.content || null;
+              ],
+              max_tokens: 512,
+              temperature: 0.3
+            }),
+            signal: controller.signal
+          });
+          const elapsed = Date.now() - startTime;
+          console.log(`OpenAI Vision API request completed in ${elapsed}ms for regeneration`);
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            console.error('OpenAI Vision API error during regeneration:', await response.text());
+          } else {
+            const openaiResult = await response.json();
+            newDescription = openaiResult.choices[0]?.message?.content?.trim() || null;
+          }
+        } catch (fetchError) {
+          const elapsed = Date.now() - startTime;
+          console.error(`OpenAI Vision API aborted after ${elapsed}ms during regeneration:`, fetchError);
+          clearTimeout(timeoutId);
+          if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+            console.error('Regeneration request timed out. Consider increasing OPENAI_VISION_TIMEOUT_MS.');
+          }
+        }
       }
     } catch (error) {
-      console.log('AI image analysis failed:', error instanceof Error ? error.message : String(error));
-      res.status(500).json({ error: 'Failed to analyze image' });
-      return;
+      console.error('Unexpected error during regeneration analysis:', error);
     }
 
     if (!newDescription) {
-      res.status(500).json({ error: 'Failed to generate new description' });
-      return;
+      newDescription = generateBasicImageDescription(image_url, context);
+      usedFallback = true;
     }
 
     // 3. Update the page with the new description
@@ -2313,7 +2955,9 @@ router.post('/books/:bookId/pages/:pageId/regenerate-description', authenticateT
 
     res.json({
       message: 'Description regenerated successfully',
-      description: newDescription
+      description: newDescription,
+      updated_page: true,
+      used_fallback: usedFallback
     });
 
   } catch (error) {

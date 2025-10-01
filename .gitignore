@@ -74,6 +74,10 @@ typings/
 .env.production.local
 .env.*.local
 
+# Cloudflare/Wrangler local environment variables
+# Prevent committing .dev.vars files anywhere in the repo
+.dev.vars
+
 # parcel-bundler cache (https://parceljs.org/)
 .cache
 .parcel-cache
@@ -149,6 +153,9 @@ public/uploads/
 # Vercel
 .vercel
 
+# Netlify
+netlify/functions/*.zip
+
 # Local development
 .local
 
@@ -183,3 +190,8 @@ out/
 
 # Sentry
 .sentryclirc
+  
+# Cloudflare Wrangler cache and temp files
+api-cloudflare/.wrangler/
+# Local Netlify folder
+.netlify

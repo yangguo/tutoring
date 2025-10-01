@@ -1,0 +1,4 @@
+# Ensure API requests reach the Netlify function before SPA fallback
+/api/* /.netlify/functions/api/:splat 200
+/.netlify/functions/api/* /.netlify/functions/api/:splat 200
+/* /index.html 200
