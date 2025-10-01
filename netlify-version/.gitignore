@@ -153,6 +153,9 @@ public/uploads/
 # Vercel
 .vercel
 
+# Netlify
+netlify/functions/*.zip
+
 # Local development
 .local
 

@@ -7,11 +7,11 @@
   NODE_VERSION = "18"
   NPM_FLAGS = "--production=false"
 
+# Use serverless functions
 [[redirects]]
   from = "/api/*"
-  to = "http://localhost:3002/api/:splat"
+  to = "/.netlify/functions/api/:splat"
   status = 200
-  force = true
 
 [[redirects]]
   from = "/*"

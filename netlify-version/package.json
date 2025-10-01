@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "check": "tsc --noEmit",
     "preview": "vite preview",
-    "dev:netlify": "concurrently \"npm run server:dev\" \"VITE_API_URL=http://localhost:3002 netlify dev\"",
+    "dev:netlify": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
     "deploy:netlify": "netlify deploy --prod",
     "seed:demo": "node api/scripts/seed-demo-users.js",
     "ensure:admin": "node api/scripts/ensure-admin.js"
