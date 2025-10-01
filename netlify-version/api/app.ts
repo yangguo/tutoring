@@ -12,19 +12,39 @@ import { fileURLToPath } from 'url';
 import apiRoutes from './router.js';
 import { runAllChecks } from './utils/health.js';
 
-// for esm mode
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// for esm mode - handle serverless environment where import.meta.url might be undefined
+let __dirname: string;
+try {
+  if (import.meta.url) {
+    const __filename = fileURLToPath(import.meta.url);
+    __dirname = path.dirname(__filename);
+  } else {
+    // Fallback for serverless/bundled environments
+    __dirname = process.cwd();
+  }
+} catch (e) {
+  // Fallback if fileURLToPath fails
+  __dirname = process.cwd();
+}
 
-// load env from project root
-dotenv.config({ path: path.join(__dirname, '../.env') });
+// load env from project root - in serverless, env is already injected by platform
+if (process.env.NETLIFY !== 'true') {
+  dotenv.config({ path: path.join(__dirname, '../.env') });
+}
 
 const app: express.Application = express();
 
 // Security middleware
 app.use(helmet());
 
-const apiBasePaths = ['/api', '/.netlify/functions/api'];
+const netlifyEnv = process.env.NETLIFY === 'true' || process.env.NETLIFY_DEV === 'true' || process.env.NETLIFY_LOCAL === 'true';
+const apiBasePathSet = new Set(['/api', '/.netlify/functions/api']);
+
+if (netlifyEnv) {
+  apiBasePathSet.add('/');
+}
+
+const apiBasePaths = Array.from(apiBasePathSet);
 
 // Rate limiting
 const limiter = rateLimit({
@@ -37,7 +57,8 @@ const limiter = rateLimit({
   }
 });
 for (const basePath of apiBasePaths) {
-  app.use(`${basePath}/`, limiter);
+  const limiterPath = basePath === '/' ? '/' : `${basePath}/`;
+  app.use(limiterPath, limiter);
 }
 
 // CORS configuration
@@ -71,7 +92,7 @@ const extendUploadTimeout = (req: Request, res: Response, next: NextFunction): v
 };
 
 for (const basePath of apiBasePaths) {
-  app.use(`${basePath}/upload`, extendUploadTimeout);
+  app.use(path.posix.join(basePath, 'upload'), extendUploadTimeout);
   app.use(basePath, apiRoutes);
 }
 
@@ -89,7 +110,7 @@ const basicHealthHandler = (_req: Request, res: Response): void => {
 };
 
 for (const basePath of apiBasePaths) {
-  app.use(`${basePath}/health`, basicHealthHandler);
+  app.use(path.posix.join(basePath, 'health'), basicHealthHandler);
 }
 
 // Detailed health checks (env + Supabase connectivity)
@@ -104,7 +125,7 @@ const detailedHealthHandler = async (_req: Request, res: Response): Promise<void
 };
 
 for (const basePath of apiBasePaths) {
-  app.get(`${basePath}/health/checks`, detailedHealthHandler);
+  app.get(path.posix.join(basePath, 'health', 'checks'), detailedHealthHandler);
 }
 
 // API documentation endpoint

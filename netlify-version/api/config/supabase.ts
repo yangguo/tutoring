@@ -3,12 +3,25 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// for esm mode
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// for esm mode - handle serverless environment where import.meta.url might be undefined
+let __dirname: string;
+try {
+  if (import.meta.url) {
+    const __filename = fileURLToPath(import.meta.url);
+    __dirname = path.dirname(__filename);
+  } else {
+    // Fallback for serverless/bundled environments
+    __dirname = process.cwd();
+  }
+} catch (e) {
+  // Fallback if fileURLToPath fails
+  __dirname = process.cwd();
+}
 
-// load env from project root
-dotenv.config({ path: path.join(__dirname, '../../.env') });
+// load env from project root - in serverless, env is already injected by platform
+if (process.env.NETLIFY !== 'true') {
+  dotenv.config({ path: path.join(__dirname, '../../.env') });
+}
 
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
