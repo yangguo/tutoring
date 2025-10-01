@@ -7,19 +7,17 @@
   NODE_VERSION = "18"
   NPM_FLAGS = "--production=false"
 
-# API Routes - redirect all /api/* requests to the Netlify function
 [[redirects]]
   from = "/api/*"
-  to = "/.netlify/functions/api/:splat"
+  to = "http://localhost:3002/api/:splat"
   status = 200
+  force = true
 
-# SPA fallback - redirect all other routes to index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
 
-# Headers for better performance and security
 [[headers]]
   for = "/*"
   [headers.values]
@@ -33,7 +31,6 @@
   [headers.values]
     Cache-Control = "max-age=31536000, immutable"
 
-# Function configuration
 [functions]
   directory = "netlify/functions"
   node_bundler = "esbuild"

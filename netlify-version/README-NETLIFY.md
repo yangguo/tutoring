@@ -1,147 +1,64 @@
-# Interactive English Tutor - Netlify Version
+# Interactive English Tutor – Netlify Edition
 
-This is the Netlify deployment version of the Interactive English Tutor web application. It has been adapted from the original Vercel deployment to work with Netlify's serverless functions and build system.
+This folder contains a self-contained Netlify deployment of the Interactive English Tutor application. It mirrors the Express/SPA project structure but compiles the backend into Netlify Functions so the API and frontend can be served from one Netlify site.
 
-## 🚀 Netlify Deployment Setup
-
-### Prerequisites
-- Node.js (v18 or higher)
-- npm or yarn
-- Netlify account
-- Supabase account
+## Prerequisites
+- Node.js 18+
+- npm
+- Netlify CLI (`npm install -g netlify-cli`)
+- Supabase project & credentials
 - OpenAI API key
 
-### Local Development
+## Getting Started
 
 1. **Install dependencies**
    ```bash
    npm install
    ```
 
-2. **Environment Setup**
+2. **Configure environment**
    ```bash
    cp .env.example .env
    ```
-   Fill in your environment variables:
-   - `SUPABASE_URL` - Your Supabase project URL
-   - `SUPABASE_SERVICE_ROLE_KEY` - Your Supabase service role key
-   - `OPENAI_API_KEY` - Your OpenAI API key
-   - `JWT_SECRET` - A secure random string for JWT signing
+   Fill in:
+   - `SUPABASE_URL`
+   - `SUPABASE_SERVICE_ROLE_KEY`
+   - `OPENAI_API_KEY`
+   - `JWT_SECRET`
+   - Any other variables referenced in `api/config`
 
-3. **Development with Netlify Dev**
+3. **Run in Netlify Dev**
    ```bash
    npm run dev:netlify
    ```
-   This starts the Netlify development server which includes:
-   - Frontend on `http://localhost:8888`
-   - Serverless functions on `http://localhost:8888/.netlify/functions/api`
+   Netlify Dev serves the frontend at http://localhost:8888 and proxies API calls to `/.netlify/functions/api`.
 
-4. **Alternative: Standard Development**
+4. **Run with separate servers (optional)**
    ```bash
    npm run dev
    ```
-   This runs the original Express server setup for comparison.
+   Starts the Vite dev server and the Express API for side-by-side comparison.
 
-### Build and Deploy
+## Build & Deploy
 
-1. **Build for production**
-   ```bash
-   npm run build:netlify
-   ```
+- `npm run build` – Type-check and build the Vite frontend.
+- `npm run build:netlify` – Alias for the standard build (used by Netlify).
+- `npm run deploy:netlify` – Deploy using the Netlify CLI.
 
-2. **Test locally**
-   ```bash
-   netlify dev
-   ```
+## Netlify Configuration
 
-3. **Deploy to Netlify**
-   ```bash
-   npm run deploy:netlify
-   ```
+- `netlify.toml` configures build commands, redirects, and security headers.
+- `netlify/functions/api.ts` is the single function entry point that wraps the Express API via `serverless-http`.
 
-### Netlify Configuration
+## Notes
+- Functions have a 30s timeout by default (configurable in `netlify.toml`).
+- Cold starts can add a few seconds to the first request.
+- All API routes continue to live under `/api` thanks to the redirect rule.
+- Remember to keep secrets out of source control—use the Netlify UI or `netlify env:set`.
 
-The project includes:
-- `netlify.toml` - Netlify build and deployment configuration
-- `netlify/functions/api.ts` - Main serverless function handling all API routes
-- Updated `package.json` with Netlify-specific scripts and dependencies
+## Troubleshooting
+- Run `npm run check` for TypeScript issues.
+- Use `netlify functions:serve` (via `netlify dev`) to inspect serverless logs locally.
+- Verify Supabase connectivity with `/api/health/checks`.
 
-## 📊 Key Differences from Vercel Version
-
-### Serverless Functions
-- **Vercel**: Uses `api/index.ts` as a single serverless function entry point
-- **Netlify**: Uses `netlify/functions/api.ts` with similar approach but adapted for Netlify's runtime
-
-### Build Process
-- **Netlify**: Requires explicit function building step (`build:functions`)
-- **Configuration**: Uses `netlify.toml` instead of `vercel.json`
-
-### Development
-- **Netlify Dev**: Provides local serverless function testing environment
-- **Proxy Setup**: Vite config updated to work with Netlify dev server
-
-### Environment Variables
-- Set in Netlify dashboard under Site Settings > Environment Variables
-- Same variables as the original version
-
-## 🔧 Scripts
-
-- `npm run dev:netlify` - Start Netlify development environment
-- `npm run build:netlify` - Build for Netlify deployment
-- `npm run deploy:netlify` - Deploy to Netlify
-- `npm run dev` - Standard development (Express server)
-- `npm run build` - Standard build (for comparison)
-
-## 📁 Project Structure
-
-The Netlify version maintains the same project structure as the original with additions:
-
-```
-netlify-version/
-├── netlify/
-│   └── functions/
-│       ├── api.ts              # Main serverless function
-│       └── tsconfig.json       # TypeScript config for functions
-├── netlify.toml                # Netlify configuration
-├── api/                        # Backend code (same as original)
-├── src/                        # Frontend code (same as original)
-├── supabase/                   # Database migrations (same as original)
-└── README-NETLIFY.md          # This file
-```
-
-## 🚨 Important Notes
-
-1. **Cold Starts**: Netlify functions may have cold start delays (5-10 seconds for first request)
-2. **Timeout**: Functions have a 30-second timeout limit (configured in netlify.toml)
-3. **Bundle Size**: The serverless function includes the entire Express app, which may impact cold start times
-4. **Environment**: Uses same environment variables as the original version
-
-## 🛠️ Troubleshooting
-
-### Common Issues
-
-1. **Function Build Errors**
-   - Check `netlify/functions/tsconfig.json` configuration
-   - Ensure all dependencies are properly installed
-   - Run `npm run build:functions` to test function compilation
-
-2. **API Routes Not Working**
-   - Verify `netlify.toml` redirects are correct
-   - Check function logs in Netlify dashboard
-   - Test with `netlify dev` locally
-
-3. **Environment Variables**
-   - Set in Netlify dashboard, not in `.env` for production
-   - Use same variable names as original version
-
-4. **Build Failures**
-   - Check Node.js version (should be 18+)
-   - Verify all dependencies are compatible with Netlify runtime
-
-## 📚 Documentation
-
-For more information about the application features and API, refer to the main README.md file in the project root.
-
-## 🤝 Support
-
-This Netlify version maintains full compatibility with the original application features. If you encounter deployment-specific issues, check the Netlify documentation or contact the development team.
+For additional architecture details, see the main `README.md` alongside this file.

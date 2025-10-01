@@ -24,6 +24,8 @@ const app: express.Application = express();
 // Security middleware
 app.use(helmet());
 
+const apiBasePaths = ['/api', '/.netlify/functions/api'];
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -34,13 +36,23 @@ const limiter = rateLimit({
     return process.env.NODE_ENV !== 'production';
   }
 });
-app.use('/api/', limiter);
+for (const basePath of apiBasePaths) {
+  app.use(`${basePath}/`, limiter);
+}
 
 // CORS configuration
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
     ? true  // Allow same origin in production (works with blank VITE_API_URL)
-    : ['http://localhost:3000', 'http://localhost:5173', 'http://localhost:5174'], // Development origins
+    : [
+        'http://localhost:3000', 
+        'http://localhost:5173', 
+        'http://localhost:5174',
+        'http://localhost:8888',      // Netlify Dev
+        'http://127.0.0.1:8888',      // Netlify Dev (IPv4)
+        'http://127.0.0.1:5173',      // Vite (IPv4)
+        'http://127.0.0.1:5174',      // Vite alt port (IPv4)
+      ], // Development origins
   credentials: true
 }));
 
@@ -51,29 +63,22 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Request timeout middleware for uploads
-app.use('/api/upload', (req: Request, res: Response, next: NextFunction) => {
+const extendUploadTimeout = (req: Request, res: Response, next: NextFunction): void => {
   // Set longer timeout for upload requests (5 minutes)
   req.setTimeout(300000);
   res.setTimeout(300000);
   next();
-});
+};
 
-
-// Request timeout middleware for uploads
-app.use('/api/upload', (req: Request, res: Response, next: NextFunction) => {
-  // Set longer timeout for upload requests (5 minutes)
-  req.setTimeout(300000);
-  res.setTimeout(300000);
-  next();
-});
-
-// API Routes
-app.use('/api', apiRoutes);
+for (const basePath of apiBasePaths) {
+  app.use(`${basePath}/upload`, extendUploadTimeout);
+  app.use(basePath, apiRoutes);
+}
 
 /**
  * health
  */
-app.use('/api/health', (_req: Request, res: Response, _next: NextFunction): void => {
+const basicHealthHandler = (_req: Request, res: Response): void => {
   res.status(200).json({
     success: true,
     message: 'ok',
@@ -81,20 +86,29 @@ app.use('/api/health', (_req: Request, res: Response, _next: NextFunction): void
     version: '1.0.0',
     timestamp: new Date().toISOString()
   });
-});
+};
+
+for (const basePath of apiBasePaths) {
+  app.use(`${basePath}/health`, basicHealthHandler);
+}
 
 // Detailed health checks (env + Supabase connectivity)
-app.get('/api/health/checks', async (_req: Request, res: Response) => {
+const detailedHealthHandler = async (_req: Request, res: Response): Promise<void> => {
   try {
     const results = await runAllChecks();
     res.status(results.ok ? 200 : 500).json({ success: results.ok, ...results });
-  } catch (e: any) {
-    res.status(500).json({ success: false, error: e?.message || 'Health checks failed' });
+  } catch (e: unknown) {
+    const error = e as { message?: string } | undefined;
+    res.status(500).json({ success: false, error: error?.message || 'Health checks failed' });
   }
-});
+};
+
+for (const basePath of apiBasePaths) {
+  app.get(`${basePath}/health/checks`, detailedHealthHandler);
+}
 
 // API documentation endpoint
-app.get('/api', (_req: Request, res: Response) => {
+const docsHandler = (_req: Request, res: Response): void => {
   res.json({
     message: 'Interactive English Tutor API',
     version: '1.0.0',
@@ -114,38 +128,42 @@ app.get('/api', (_req: Request, res: Response) => {
         'DELETE /api/upload/book/:bookId': 'Delete a book'
       },
       books: {
-         'GET /api/books': 'Get all public books',
-         'GET /api/books/:bookId': 'Get book by ID with pages',
-         'POST /api/books/reading-session': 'Create reading session',
-         'POST /api/books/speaking-session': 'Create speaking session',
-         'GET /api/books/progress': 'Get user reading progress',
-         'GET /api/books/reading-sessions': 'Get user reading sessions',
-         'GET /api/books/speaking-sessions': 'Get user speaking sessions',
-         'GET /api/books/vocabulary': 'Get vocabulary words',
-         'POST /api/books/vocabulary/learn': 'Add word to user vocabulary',
-         'GET /api/books/vocabulary/learned': 'Get user learned vocabulary'
-       },
-       achievements: {
-         'GET /api/achievements': 'Get all achievements',
-         'GET /api/achievements/user/:userId': 'Get user achievements',
-         'POST /api/achievements/award': 'Award achievement to user',
-         'DELETE /api/achievements/revoke': 'Revoke achievement from user',
-         'GET /api/achievements/leaderboard': 'Get achievement leaderboard'
-       },
-       dashboard: {
-         'GET /api/dashboard/students': 'Get student data with progress',
-         'GET /api/dashboard/lessons': 'Get lesson plans',
-         'POST /api/dashboard/lessons': 'Create lesson plan',
-         'PUT /api/dashboard/lessons/:id': 'Update lesson plan',
-         'DELETE /api/dashboard/lessons/:id': 'Delete lesson plan',
-         'GET /api/dashboard/analytics': 'Get analytics data'
-       },
-       chat: {
-         'POST /api/chat/lesson': 'AI chat for lesson-based tutoring with book context'
-       }
+        'GET /api/books': 'Get all public books',
+        'GET /api/books/:bookId': 'Get book by ID with pages',
+        'POST /api/books/reading-session': 'Create reading session',
+        'POST /api/books/speaking-session': 'Create speaking session',
+        'GET /api/books/progress': 'Get user reading progress',
+        'GET /api/books/reading-sessions': 'Get user reading sessions',
+        'GET /api/books/speaking-sessions': 'Get user speaking sessions',
+        'GET /api/books/vocabulary': 'Get vocabulary words',
+        'POST /api/books/vocabulary/learn': 'Add word to user vocabulary',
+        'GET /api/books/vocabulary/learned': 'Get user learned vocabulary'
+      },
+      achievements: {
+        'GET /api/achievements': 'Get all achievements',
+        'GET /api/achievements/user/:userId': 'Get user achievements',
+        'POST /api/achievements/award': 'Award achievement to user',
+        'DELETE /api/achievements/revoke': 'Revoke achievement from user',
+        'GET /api/achievements/leaderboard': 'Get achievement leaderboard'
+      },
+      dashboard: {
+        'GET /api/dashboard/students': 'Get student data with progress',
+        'GET /api/dashboard/lessons': 'Get lesson plans',
+        'POST /api/dashboard/lessons': 'Create lesson plan',
+        'PUT /api/dashboard/lessons/:id': 'Update lesson plan',
+        'DELETE /api/dashboard/lessons/:id': 'Delete lesson plan',
+        'GET /api/dashboard/analytics': 'Get analytics data'
+      },
+      chat: {
+        'POST /api/chat/lesson': 'AI chat for lesson-based tutoring with book context'
+      }
     }
   });
-});
+};
+
+for (const basePath of apiBasePaths) {
+  app.get(basePath, docsHandler);
+}
 
 /**
  * error handler middleware

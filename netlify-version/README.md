@@ -138,8 +138,6 @@ tutoring/
 │   ├── config/            # Supabase bindings
 │   ├── lib/               # Shared utilities (OpenAI client, etc.)
 │   └── router.ts          # Worker router wiring
-├── netlify/               # Netlify serverless functions
-│   └── functions/         # Netlify function handlers
 ├── src/                   # Frontend React application
 │   ├── components/        # Reusable React components
 │   ├── pages/            # Page components
@@ -186,13 +184,6 @@ The application uses JWT-based authentication with the following user roles:
 1. Connect the repository to Vercel
 2. Configure environment variables for the frontend (`VITE_*`) and Express API (e.g., `SUPABASE_*`, `OPENAI_*`, `JWT_SECRET`) in the Vercel dashboard
 3. Deploy automatically on push to the configured branch (see `vercel.json`)
-
-### Netlify (Frontend + Express API via Serverless Functions)
-
-1. See `README-NETLIFY.md` for detailed Netlify deployment instructions
-2. Configure environment variables in Netlify dashboard under Site Settings > Environment Variables
-3. Uses `netlify.toml` for build configuration and serverless functions in `netlify/functions/`
-4. Deploy with `npm run deploy:netlify` or connect repository to Netlify for automatic deployments
 
 ### Cloudflare Workers (Hono API)
 
