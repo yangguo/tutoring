@@ -134,22 +134,34 @@ const Upload: React.FC = () => {
         formDataToSend.append('file', formData.file);
       }
 
+      // Use AbortController to align with server-side 5 min timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        console.log('Main upload timeout reached (5 minutes)');
+        controller.abort();
+      }, 300000);
       const response = await fetch(buildApiUrl('/api/upload/book'), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`
         },
-        body: formDataToSend
+        body: formDataToSend,
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
 
-      const result = await response.json();
+      // Read raw text first to avoid JSON parse crashes on empty bodies
+      const raw = await response.text();
+      const result = raw ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : {};
 
       if (!response.ok) {
-        throw new Error(result.error || 'Upload failed');
+        const msg = (result as any)?.error || (raw || 'Upload failed');
+        throw new Error(typeof msg === 'string' ? msg : 'Upload failed');
       }
 
       // If a PDF was uploaded, convert to images and upload pages
       if (formData.file && formData.file.type === 'application/pdf' && result?.book?.id) {
+        let pagesTimeoutId: NodeJS.Timeout | undefined;
         try {
           setConversionProgress('Converting PDF to images...');
           const images = await convertPdfFileToImages(formData.file);
@@ -163,16 +175,29 @@ const Upload: React.FC = () => {
             pagesForm.append('pages', file, fileName);
           });
 
+          // Use AbortController for pages upload timeout (10 minutes for multiple large images)
+          const pagesController = new AbortController();
+          pagesTimeoutId = setTimeout(() => {
+            console.log('Pages upload timeout reached (10 minutes)');
+            pagesController.abort();
+          }, 600000);
           const pagesResp = await fetch(buildApiUrl(`/api/upload/book/${result.book.id}/pages`), {
             method: 'POST',
             headers: {
               Authorization: `Bearer ${token}`,
             },
             body: pagesForm,
+            signal: pagesController.signal
           });
-          const pagesResult = await pagesResp.json().catch(() => ({}));
+          clearTimeout(pagesTimeoutId);
+
+          // Read raw text first to avoid JSON parse crashes on empty bodies
+          const pagesRaw = await pagesResp.text();
+          const pagesResult = pagesRaw ? (() => { try { return JSON.parse(pagesRaw); } catch { return {}; } })() : {};
+
           if (!pagesResp.ok) {
-            throw new Error(pagesResult.error || 'Failed to upload page images');
+            const msg = (pagesResult as any)?.error || (pagesRaw || 'Failed to upload page images');
+            throw new Error(typeof msg === 'string' ? msg : 'Failed to upload page images');
           }
 
           setConversionProgress(null);
@@ -182,9 +207,23 @@ const Upload: React.FC = () => {
           });
         } catch (convErr) {
           setConversionProgress(null);
+          // Clear any pending timeouts
+          if (typeof pagesTimeoutId !== 'undefined') {
+            clearTimeout(pagesTimeoutId);
+          }
+          
+          let errorMessage = 'PDF conversion failed';
+          if (convErr instanceof Error) {
+            if (convErr.name === 'AbortError') {
+              errorMessage = 'Upload timeout. Please try again with a smaller file or check your connection.';
+            } else {
+              errorMessage = convErr.message;
+            }
+          }
+          
           setUploadStatus({
             type: 'error',
-            message: convErr instanceof Error ? convErr.message : 'PDF conversion failed'
+            message: errorMessage
           });
         }
       } else {
@@ -214,9 +253,18 @@ const Upload: React.FC = () => {
       }
 
     } catch (error) {
+      let errorMessage = 'Upload failed';
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          errorMessage = 'Upload timeout. Please try again with a smaller file or check your connection.';
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      
       setUploadStatus({
         type: 'error',
-        message: error instanceof Error ? error.message : 'Upload failed'
+        message: errorMessage
       });
     } finally {
       setIsUploading(false);

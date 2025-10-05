@@ -333,37 +333,107 @@ class ApiClient {
 
   // File Upload
   async uploadBook(formData: FormData) {
-    const response = await fetch(`${this.baseURL}/api/upload/book`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-      },
-      body: formData,
-    });
+    // Create AbortController for timeout handling
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-      throw new Error(errorData.error || `HTTP ${response.status}`);
+    try {
+      const response = await fetch(`${this.baseURL}/api/upload/book`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: formData,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      // Read raw text to avoid JSON parse errors on empty bodies
+      const rawText = await response.text().catch(() => '');
+
+      if (!response.ok) {
+        // Try to parse structured error, otherwise use raw text or status code
+        let errorMessage = `HTTP ${response.status}`;
+        if (rawText) {
+          try {
+            const errorData = JSON.parse(rawText);
+            errorMessage = (errorData && (errorData.error || errorData.message)) || errorMessage;
+          } catch {
+            errorMessage = rawText || errorMessage;
+          }
+        }
+        throw new Error(errorMessage || 'Upload failed');
+      }
+
+      // Successful response: ensure non-empty JSON
+      if (!rawText) {
+        throw new Error('Empty response from server. The connection may have been interrupted.');
+      }
+      try {
+        return JSON.parse(rawText);
+      } catch {
+        throw new Error('Invalid JSON response from server.');
+      }
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Upload timeout. Please try again with a smaller file or check your connection.');
+      }
+      throw error;
     }
-
-    return response.json();
   }
 
   async uploadBookPages(bookId: string, formData: FormData) {
-    const response = await fetch(`${this.baseURL}/api/upload/book/${bookId}/pages`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-      },
-      body: formData,
-    });
+    // Create AbortController for timeout handling
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-      throw new Error(errorData.error || `HTTP ${response.status}`);
+    try {
+      const response = await fetch(`${this.baseURL}/api/upload/book/${bookId}/pages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: formData,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      // Read raw text to avoid JSON parse errors on empty bodies
+      const rawText = await response.text().catch(() => '');
+
+      if (!response.ok) {
+        // Try to parse structured error, otherwise use raw text or status code
+        let errorMessage = `HTTP ${response.status}`;
+        if (rawText) {
+          try {
+            const errorData = JSON.parse(rawText);
+            errorMessage = (errorData && (errorData.error || errorData.message)) || errorMessage;
+          } catch {
+            errorMessage = rawText || errorMessage;
+          }
+        }
+        throw new Error(errorMessage || 'Upload failed');
+      }
+
+      // Successful response: ensure non-empty JSON
+      if (!rawText) {
+        throw new Error('Empty response from server. The connection may have been interrupted.');
+      }
+      try {
+        return JSON.parse(rawText);
+      } catch {
+        throw new Error('Invalid JSON response from server.');
+      }
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error('Upload timeout. Please try again with a smaller file or check your connection.');
+      }
+      throw error;
     }
-
-    return response.json();
   }
 
   async getUserBooks() {

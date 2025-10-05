@@ -36,4 +36,4 @@
   node_bundler = "esbuild"
 
 [functions."api"]
-  timeout = 30
+  timeout = 300

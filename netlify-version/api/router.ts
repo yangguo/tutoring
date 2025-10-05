@@ -3049,18 +3049,25 @@ const bookMetadataSchema = Joi.object({
   target_age_min: Joi.number().integer().min(3).max(18).required(),
   target_age_max: Joi.number().integer().min(3).max(18).required(),
   difficulty_level: Joi.string().valid('beginner', 'intermediate', 'advanced').required(),
-  category: Joi.string().optional(),
+  category: Joi.string()
+    .valid(
+      'fiction', 'non-fiction', 'educational', 'children', 'science',
+      'history', 'biography', 'fantasy', 'mystery', 'romance', 'general',
+      // Accept difficulty values as fallback (matches DB constraint migration)
+      'beginner', 'intermediate', 'advanced'
+    )
+    .default('general'),
   language: Joi.string().default('en'),
   is_public: Joi.boolean().default(false)
 }).options({ convert: true });
 
 router.post('/upload/book', authenticateToken, requireRole(['parent', 'admin']), upload.single('file'), handleMulterError, async (req: Request, res: Response): Promise<void> => {
   try {
-    // Check if client disconnected
-    if (req.destroyed || res.destroyed) {
-      console.log('Client disconnected during upload');
-      return;
-    }
+    // Note: do not short-circuit based on destroyed/aborted flags here.
+    // Some proxies can toggle these early causing false timeouts.
+    req.once('aborted', () => {
+      console.log('Client aborted during upload');
+    });
 
     if (!req.file) {
       res.status(400).json({ error: 'No file uploaded' });
@@ -3306,46 +3313,9 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
           .from('book-files')
           .getPublicUrl(filePath);
 
-        // Analyze image with AI (optional, non-blocking)
+        // Skip AI analysis during bulk upload to prevent timeouts
+        // AI analysis can be done later via the analyze-images endpoint
         let imageDescription: string | null = null;
-        try {
-          // Import OpenAI configuration
-          const openaiConfig = process.env.OPENAI_API_KEY ? {
-            apiKey: process.env.OPENAI_API_KEY
-          } : null;
-
-          if (openaiConfig) {
-            const { OpenAI } = await import('openai');
-            const openai = new OpenAI(openaiConfig);
-            
-            const response = await openai.chat.completions.create({
-              model: process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo',
-              messages: [
-                {
-                  role: "user",
-                  content: [
-                    {
-                      type: "text",
-                      text: "Analyze this children\'s book page image. Provide a detailed, educational description suitable for English language learners. Focus on objects, characters, actions, and educational content. Keep it age-appropriate and engaging."
-                    },
-                    {
-                      type: "image_url",
-                      image_url: {
-                        url: `data:${file.mimetype};base64,${file.buffer.toString('base64')}`
-                      }
-                    }
-                  ]
-                }
-              ],
-              max_tokens: 10000
-            });
-            
-            imageDescription = response.choices[0]?.message?.content || null;
-          }
-        } catch (error) {
-          console.log('AI image analysis failed, continuing without description:', error instanceof Error ? error.message : String(error));
-          // Continue without description - this is optional
-        }
 
         // Create page record
         const { data: pageData, error: pageError } = await supabase
