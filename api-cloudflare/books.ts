@@ -326,7 +326,7 @@ books.get('/', async (c) => {
   });
 });
 
-books.get('/:bookId', async (c) => {
+books.get('/:bookId{[0-9a-fA-F-]+}', async (c) => {
   try {
     const { bookId } = c.req.param();
     
@@ -421,51 +421,63 @@ books.get('/:bookId', async (c) => {
 // Get vocabulary for books
 books.get('/vocabulary', async (c) => {
   try {
-    const bookId = c.req.query('book_id');
-    const page = parseInt(c.req.query('page') || '1');
-    const limit = parseInt(c.req.query('limit') || '20');
-    const difficulty = c.req.query('difficulty');
-    
     const supabase = createSupabaseClient(c.env);
-    
+    const bookId = c.req.query('book_id');
+    const difficultyLevel = c.req.query('difficulty_level') ?? c.req.query('difficulty');
+    const category = c.req.query('category');
+    const search = c.req.query('search');
+    const page = parseNumberParam(c.req.query('page'), 1);
+    const limit = parseNumberParam(c.req.query('limit'), 20);
+    const offset = (page - 1) * limit;
+
     let query = supabase
       .from('vocabulary_words')
-      .select(`
-        *,
-        books (
-          id,
-          title,
-          difficulty_level
-        )
-      `)
-      .range((page - 1) * limit, page * limit - 1)
-      .order('created_at', { ascending: false });
+      .select('*');
 
     if (bookId) {
       query = query.eq('book_id', bookId);
     }
 
-    if (difficulty) {
-      query = query.eq('difficulty_level', difficulty);
+    if (difficultyLevel) {
+      query = query.eq('difficulty_level', difficultyLevel);
     }
 
-    const { data: vocabulary, error } = await query;
+    if (category) {
+      query = query.eq('category', category);
+    }
+
+    if (search) {
+      const trimmed = search.replace('%', '').trim();
+      if (trimmed) {
+        query = query.or(`word.ilike.%${trimmed}%,definition.ilike.%${trimmed}%`);
+      }
+    }
+
+    const { data, error } = await query
+      .order('word', { ascending: true })
+      .range(offset, offset + limit - 1);
 
     if (error) {
-      console.error('Error fetching vocabulary:', error);
+      logger.error('Failed to fetch vocabulary', error, {
+        difficultyLevel,
+        category,
+        search,
+        page,
+        limit
+      });
       return c.json({ error: 'Failed to fetch vocabulary' }, 500);
     }
 
+    const words = data ?? [];
+
     return c.json({
-      vocabulary: vocabulary || [],
-      pagination: {
-        page,
-        limit,
-        total: vocabulary?.length || 0
-      }
+      vocabulary: words,
+      words,
+      page,
+      limit
     });
   } catch (error) {
-    console.error('Error in get vocabulary:', error);
+    logger.error('Error in get vocabulary', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
@@ -490,16 +502,13 @@ books.get('/discussions', async (c) => {
     }
 
     const bookId = c.req.query('book_id');
-    const page = parseInt(c.req.query('page') || '1');
-    const limit = parseInt(c.req.query('limit') || '20');
-    
-    if (!bookId) {
-      return c.json({ error: 'book_id parameter is required' }, 400);
-    }
+    const page = parseNumberParam(c.req.query('page'), 1);
+    const limit = parseNumberParam(c.req.query('limit'), 20);
+    const offset = (page - 1) * limit;
 
     const supabase = createSupabaseClient(c.env);
-    
-    const { data: discussions, error } = await supabase
+
+    let query = supabase
       .from('book_discussions')
       .select(`
         *,
@@ -508,25 +517,62 @@ books.get('/discussions', async (c) => {
           title
         )
       `)
-      .eq('book_id', bookId)
-      .range((page - 1) * limit, page * limit - 1)
-      .order('created_at', { ascending: false });
+      .eq('user_id', payload.userId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (bookId) {
+      query = query.eq('book_id', bookId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
-      console.error('Error fetching discussions:', error);
+      logger.error('Failed to fetch discussions', error, {
+        userId: payload.userId,
+        bookId,
+        page,
+        limit
+      });
       return c.json({ error: 'Failed to fetch discussions' }, 500);
     }
 
     return c.json({
-      discussions: discussions || [],
-      pagination: {
-        page,
-        limit,
-        total: discussions?.length || 0
-      }
+      discussions: data ?? [],
+      page,
+      limit
     });
   } catch (error) {
-    console.error('Error in get discussions:', error);
+    logger.error('Error in get discussions', error);
+    return c.json({ error: 'Internal server error' }, 500);
+  }
+});
+
+books.get('/pages/:pageId/glossary', async (c) => {
+  try {
+    const { pageId } = c.req.param();
+
+    if (!pageId) {
+      return c.json({ error: 'Page ID is required' }, 400);
+    }
+
+    const supabase = createSupabaseClient(c.env);
+
+    const { data, error } = await supabase
+      .from('page_glossary_entries')
+      .select('*')
+      .eq('page_id', pageId)
+      .order('confidence', { ascending: false })
+      .order('word', { ascending: true });
+
+    if (error) {
+      logger.error('Failed to fetch page glossary entries', error, { pageId });
+      return c.json({ error: 'Failed to fetch glossary entries' }, 500);
+    }
+
+    return c.json({ entries: data ?? [] });
+  } catch (error) {
+    logger.error('Unexpected glossary fetch error', error);
     return c.json({ error: 'Internal server error' }, 500);
   }
 });
