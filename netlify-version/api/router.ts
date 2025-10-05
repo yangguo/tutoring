@@ -940,7 +940,7 @@ router.get('/books/discussions', authenticateToken, async (req: Request, res: Re
   }
 });
 
-router.get('/books/:bookId', async (req: Request, res: Response): Promise<void> => {
+router.get('/books/:bookId([0-9a-fA-F-]+)', async (req: Request, res: Response): Promise<void> => {
   try {
     const { bookId } = req.params;
 
@@ -1998,7 +1998,7 @@ router.post(
   }
 );
 
-router.post('/books/:bookId/analyze-images', authenticateToken, requireRole(['admin']), async (req: Request, res: Response): Promise<void> => {
+router.post('/books/:bookId([0-9a-fA-F-]+)/analyze-images', authenticateToken, requireRole(['admin']), async (req: Request, res: Response): Promise<void> => {
   try {
     const { bookId } = req.params;
     const { force_reanalyze = false } = req.body;
@@ -2858,7 +2858,7 @@ router.get('/dashboard/analytics', async (_req: Request, res: Response) => {
 // Regenerate Routes
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 
-router.post('/books/:bookId/pages/:pageId/regenerate-description', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+router.post('/books/:bookId([0-9a-fA-F-]+)/pages/:pageId([0-9a-fA-F-]+)/regenerate-description', authenticateToken, async (req: Request, res: Response): Promise<void> => {
   try {
     console.log(`Regenerating description for page ${req.params.pageId}`);
     const { pageId } = req.params;
