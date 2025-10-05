@@ -13,7 +13,8 @@
     "dev:api": "nodemon",
     "dev": "concurrently \"npm run client:dev\" \"npm run server:dev\"",
     "seed:demo": "node api/scripts/seed-demo-users.js",
-    "ensure:admin": "node api/scripts/ensure-admin.js"
+    "ensure:admin": "node api/scripts/ensure-admin.js",
+    "test:demo-login": "node scripts/test-demo-login.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

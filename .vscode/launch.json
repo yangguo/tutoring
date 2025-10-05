@@ -1,0 +1,20 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Test Demo Logins",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/test-demo-login.mjs",
+      "env": {
+        "API_BASE_URL": "http://localhost:3002"
+      },
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "presentation": {
+        "group": "tests",
+        "order": 1
+      }
+    }
+  ]
+}
