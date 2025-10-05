@@ -903,6 +903,53 @@ router.get('/books/discussions', authenticateToken, async (req: Request, res: Re
   }
 });
 
+router.get('/books/vocabulary', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { difficulty_level, category, search, page = 1, limit = 20 } = req.query;
+
+    const parsedLimit = Number(limit);
+    const parsedPage = Number(page);
+    const offset = (parsedPage - 1) * parsedLimit;
+
+    let query = supabase
+      .from('vocabulary_words')
+      .select('*');
+
+    if (difficulty_level) {
+      query = query.eq('difficulty_level', difficulty_level);
+    }
+
+    if (category) {
+      query = query.eq('category', category);
+    }
+
+    if (search) {
+      query = query.or(`word.ilike.%${search}%,definition.ilike.%${search}%`);
+    }
+
+    const { data: vocabulary, error } = await query
+      .order('word', { ascending: true })
+      .range(offset, offset + parsedLimit - 1);
+
+    if (error) {
+      res.status(500).json({ error: 'Failed to fetch vocabulary' });
+      return;
+    }
+
+    const vocabularyList = vocabulary || [];
+
+    res.json({
+      vocabulary: vocabularyList,
+      words: vocabularyList,
+      page: parsedPage,
+      limit: parsedLimit
+    });
+  } catch (error) {
+    console.error('Get vocabulary error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get('/books/:bookId', async (req: Request, res: Response): Promise<void> => {
   try {
     const { bookId } = req.params;
@@ -1155,44 +1202,6 @@ router.get('/books/speaking-sessions', authenticateToken, async (req: Request, r
     });
   } catch (error) {
     console.error('Get speaking sessions error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-router.get('/books/vocabulary', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { difficulty_level, search, page = 1, limit = 20 } = req.query;
-    
-    const offset = (Number(page) - 1) * Number(limit);
-
-    let query = supabase
-      .from('vocabulary_words')
-      .select('*');
-
-    if (difficulty_level) {
-      query = query.eq('difficulty_level', difficulty_level);
-    }
-
-    if (search) {
-      query = query.or(`word.ilike.%${search}%,definition.ilike.%${search}%`);
-    }
-
-    const { data: vocabulary, error } = await query
-      .order('word', { ascending: true })
-      .range(offset, offset + Number(limit) - 1);
-
-    if (error) {
-      res.status(500).json({ error: 'Failed to fetch vocabulary' });
-      return;
-    }
-
-    res.json({
-      vocabulary: vocabulary || [],
-      page: Number(page),
-      limit: Number(limit)
-    });
-  } catch (error) {
-    console.error('Get vocabulary error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
