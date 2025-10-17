@@ -333,37 +333,79 @@ class ApiClient {
 
   // File Upload
   async uploadBook(formData: FormData) {
-    const response = await fetch(`${this.baseURL}/api/upload/book`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-      },
-      body: formData,
-    });
+    // Use 5 minute timeout for large file uploads
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 300000);
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-      throw new Error(errorData.error || `HTTP ${response.status}`);
+    try {
+      const response = await fetch(`${this.baseURL}/api/upload/book`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: formData,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          throw new Error('Upload timeout after 5 minutes. Please try again with a smaller file or check your connection.');
+        }
+        if (error.message.includes('fetch') || error.message.includes('NetworkError')) {
+          throw new Error('Upload failed due to network error. Please check your internet connection.');
+        }
+      }
+      throw error;
     }
-
-    return response.json();
   }
 
   async uploadBookPages(bookId: string, formData: FormData) {
-    const response = await fetch(`${this.baseURL}/api/upload/book/${bookId}/pages`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-      },
-      body: formData,
-    });
+    // Use 10 minute timeout for multiple page uploads (can be many large images)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 600000);
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
-      throw new Error(errorData.error || `HTTP ${response.status}`);
+    try {
+      const response = await fetch(`${this.baseURL}/api/upload/book/${bookId}/pages`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+        },
+        body: formData,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Upload failed' }));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      return response.json();
+    } catch (error) {
+      clearTimeout(timeoutId);
+      
+      if (error instanceof Error) {
+        if (error.name === 'AbortError') {
+          throw new Error('Page upload timeout after 10 minutes. Please try uploading fewer pages at a time or check your connection.');
+        }
+        if (error.message.includes('fetch') || error.message.includes('NetworkError')) {
+          throw new Error('Page upload failed due to network error. Please check your internet connection.');
+        }
+      }
+      throw error;
     }
-
-    return response.json();
   }
 
   async getUserBooks() {

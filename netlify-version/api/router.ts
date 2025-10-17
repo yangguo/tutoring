@@ -3290,6 +3290,14 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
       const file = files[i];
       
       try {
+        // Extract page number from filename (e.g., "page-5.png" -> 5)
+        // Frontend sends files with names like "page-{pageNumber}.png"
+        let pageNumber = i + 1; // Default to index-based numbering
+        const pageMatch = file.originalname.match(/page-(\d+)/i);
+        if (pageMatch && pageMatch[1]) {
+          pageNumber = parseInt(pageMatch[1], 10);
+        }
+
         // Generate unique filename
         const fileExtension = file.originalname.split('.').pop();
         const fileName = `${Date.now()}-${i}-${Math.random().toString(36).substring(2)}.${fileExtension}`;
@@ -3322,7 +3330,7 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
           .from('book_pages')
           .insert({
             book_id: bookId,
-            page_number: i + 1,
+            page_number: pageNumber,
             image_url: urlData.publicUrl,
             image_description: imageDescription
           })

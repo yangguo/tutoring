@@ -63,6 +63,8 @@ upload.post('/book', async (c) => {
       return c.json({ error: 'Permission denied. Only parents and admins can upload books.' }, 403);
     }
 
+    console.log(`[Upload] Starting upload for user ${userId}`);
+
     // Parse form data
     const formData = await c.req.formData();
     const file = formData.get('file') as File;
@@ -70,6 +72,8 @@ upload.post('/book', async (c) => {
     if (!file) {
       return c.json({ error: 'No file uploaded' }, 400);
     }
+
+    console.log(`[Upload] File received: ${file.name} (${file.size} bytes)`);
 
     // Validate file type
     const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'application/pdf'];
@@ -107,9 +111,11 @@ upload.post('/book', async (c) => {
     const filePath = `books/${userId}/${fileName}`;
 
     // Convert file to buffer
+    console.log(`[Upload] Converting file to buffer`);
     const fileBuffer = await file.arrayBuffer();
 
     // Upload file to Supabase Storage
+    console.log(`[Upload] Uploading to storage: ${filePath}`);
     const { data: uploadData, error: uploadError } = await supabase.storage
       .from('book-files')
       .upload(filePath, fileBuffer, {
@@ -118,7 +124,7 @@ upload.post('/book', async (c) => {
       });
 
     if (uploadError) {
-      console.error('Storage upload error:', uploadError);
+      console.error('[Upload] Storage error:', uploadError);
       return c.json({ error: 'Failed to upload file to storage' }, 500);
     }
 
@@ -128,6 +134,7 @@ upload.post('/book', async (c) => {
       .getPublicUrl(filePath);
 
     // Create book record in database
+    console.log(`[Upload] Creating database record for: ${metadata.title}`);
     const { data: bookData, error: bookError } = await supabase
       .from('books')
       .insert({
@@ -150,11 +157,12 @@ upload.post('/book', async (c) => {
 
     if (bookError) {
       // Clean up uploaded file if database insert fails
+      console.error('[Upload] Database error:', bookError);
       await supabase.storage.from('book-files').remove([filePath]);
-      console.error('Database error:', bookError);
       return c.json({ error: 'Failed to create book record' }, 500);
     }
 
+    console.log(`[Upload] Successfully uploaded book: ${bookData.id}`);
     return c.json({
       message: 'Book uploaded successfully',
       book: {
@@ -172,7 +180,7 @@ upload.post('/book', async (c) => {
       }
     }, 201);
   } catch (error) {
-    console.error('Upload book error:', error);
+    console.error('[Upload] Book upload error:', error);
     return handleError(c, error);
   }
 });

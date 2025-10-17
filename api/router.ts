@@ -3028,16 +3028,44 @@ const bookMetadataSchema = Joi.object({
 
 router.post('/upload/book', authenticateToken, requireRole(['parent', 'admin']), upload.single('file'), handleMulterError, async (req: Request, res: Response): Promise<void> => {
   try {
-    // Check if client disconnected
-    if (req.destroyed || res.destroyed) {
-      console.log('Client disconnected during upload');
-      return;
-    }
-
+    // Set headers for long-running uploads
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Keep-Alive', 'timeout=600'); // 10 minute keep-alive
+    
     if (!req.file) {
       res.status(400).json({ error: 'No file uploaded' });
       return;
     }
+
+    console.log(`[Upload] Starting upload for user ${(req as any).user?.userId}, file: ${req.file.originalname} (${req.file.size} bytes)`);
+
+    // Monitor for client disconnect using aborted/close events
+    let clientDisconnected = false;
+    const markDisconnected = (): void => {
+      if (!clientDisconnected) {
+        clientDisconnected = true;
+        console.log('[Upload] Client disconnected during processing');
+      }
+      cleanupListeners();
+    };
+
+    const handleResponseClose = (): void => {
+      if (!res.writableEnded) {
+        markDisconnected();
+      } else {
+        cleanupListeners();
+      }
+    };
+
+    const cleanupListeners = (): void => {
+      req.off('aborted', markDisconnected);
+      res.off('close', handleResponseClose);
+      res.off('finish', cleanupListeners);
+    };
+
+    req.on('aborted', markDisconnected);
+    res.on('close', handleResponseClose);
+    res.on('finish', cleanupListeners);
 
     // Validate metadata
     const { error: validationError, value } = bookMetadataSchema.validate(req.body);
@@ -3054,7 +3082,14 @@ router.post('/upload/book', authenticateToken, requireRole(['parent', 'admin']),
     const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExtension}`;
     const filePath = `books/${fileName}`;
 
+    // Check if client disconnected before upload
+    if (clientDisconnected) {
+      console.log('[Upload] Client disconnected before storage upload');
+      return;
+    }
+
     // Upload file to Supabase Storage
+    console.log(`[Upload] Uploading to storage: ${filePath}`);
     const { data: _uploadData, error: uploadError } = await supabase.storage
       .from('book-files')
       .upload(filePath, req.file.buffer, {
@@ -3063,8 +3098,17 @@ router.post('/upload/book', authenticateToken, requireRole(['parent', 'admin']),
       });
 
     if (uploadError) {
-      console.error('Upload error:', uploadError);
-      res.status(500).json({ error: 'Failed to upload file' });
+      console.error('[Upload] Storage error:', uploadError);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to upload file' });
+      }
+      return;
+    }
+
+    // Check if client disconnected after upload
+    if (clientDisconnected) {
+      console.log('[Upload] Client disconnected after storage upload, cleaning up');
+      await supabase.storage.from('book-files').remove([filePath]);
       return;
     }
 
@@ -3074,6 +3118,7 @@ router.post('/upload/book', authenticateToken, requireRole(['parent', 'admin']),
       .getPublicUrl(filePath);
 
     // Create book record in database
+    console.log(`[Upload] Creating database record for: ${title}`);
     const { data: bookData, error: bookError } = await supabase
       .from('books')
       .insert({
@@ -3096,30 +3141,41 @@ router.post('/upload/book', authenticateToken, requireRole(['parent', 'admin']),
 
     if (bookError) {
       // Clean up uploaded file if database insert fails
+      console.error('[Upload] Database error:', bookError);
       await supabase.storage.from('book-files').remove([filePath]);
-      console.error('Database error:', bookError);
-      res.status(500).json({ error: 'Failed to create book record' });
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to create book record' });
+      }
       return;
     }
 
-    res.status(201).json({
-      message: 'Book uploaded successfully',
-      book: {
-        id: bookData.id,
-        title: bookData.title,
-        description: bookData.description,
-        file_url: bookData.file_url,
-        target_age_min: bookData.target_age_min,
-        target_age_max: bookData.target_age_max,
-        difficulty_level: bookData.difficulty_level,
-        category: bookData.category,
-        language: bookData.language,
-        is_public: bookData.is_public,
-        created_at: bookData.created_at
-      }
-    });
+    // Check if client disconnected before response
+    if (clientDisconnected) {
+      console.log('[Upload] Client disconnected before response, but upload completed successfully');
+      return;
+    }
+
+    console.log(`[Upload] Successfully uploaded book: ${bookData.id}`);
+    if (!res.headersSent) {
+      res.status(201).json({
+        message: 'Book uploaded successfully',
+        book: {
+          id: bookData.id,
+          title: bookData.title,
+          description: bookData.description,
+          file_url: bookData.file_url,
+          target_age_min: bookData.target_age_min,
+          target_age_max: bookData.target_age_max,
+          difficulty_level: bookData.difficulty_level,
+          category: bookData.category,
+          language: bookData.language,
+          is_public: bookData.is_public,
+          created_at: bookData.created_at
+        }
+      });
+    }
   } catch (error) {
-    console.error('Upload book error:', error);
+    console.error('[Upload] Error:', error);
     
     // Handle specific error types
     if (error instanceof Error) {
@@ -3255,6 +3311,14 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
       const file = files[i];
       
       try {
+        // Extract page number from filename (e.g., "page-5.png" -> 5)
+        // Frontend sends files with names like "page-{pageNumber}.png"
+        let pageNumber = i + 1; // Default to index-based numbering
+        const pageMatch = file.originalname.match(/page-(\d+)/i);
+        if (pageMatch && pageMatch[1]) {
+          pageNumber = parseInt(pageMatch[1], 10);
+        }
+
         // Generate unique filename
         const fileExtension = file.originalname.split('.').pop();
         const fileName = `${Date.now()}-${i}-${Math.random().toString(36).substring(2)}.${fileExtension}`;
@@ -3278,53 +3342,16 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
           .from('book-files')
           .getPublicUrl(filePath);
 
-        // Analyze image with AI (optional, non-blocking)
-        let imageDescription: string | null = null;
-        try {
-          // Import OpenAI configuration
-          const openaiConfig = process.env.OPENAI_API_KEY ? {
-            apiKey: process.env.OPENAI_API_KEY
-          } : null;
-
-          if (openaiConfig) {
-            const { OpenAI } = await import('openai');
-            const openai = new OpenAI(openaiConfig);
-            
-            const response = await openai.chat.completions.create({
-              model: process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo',
-              messages: [
-                {
-                  role: "user",
-                  content: [
-                    {
-                      type: "text",
-                      text: "Analyze this children\'s book page image. Provide a detailed, educational description suitable for English language learners. Focus on objects, characters, actions, and educational content. Keep it age-appropriate and engaging."
-                    },
-                    {
-                      type: "image_url",
-                      image_url: {
-                        url: `data:${file.mimetype};base64,${file.buffer.toString('base64')}`
-                      }
-                    }
-                  ]
-                }
-              ],
-              max_tokens: 10000
-            });
-            
-            imageDescription = response.choices[0]?.message?.content || null;
-          }
-        } catch (error) {
-          console.log('AI image analysis failed, continuing without description:', error instanceof Error ? error.message : String(error));
-          // Continue without description - this is optional
-        }
+        // Skip AI analysis during bulk upload to prevent timeouts
+        // AI analysis can be done later via a separate endpoint if needed
+        const imageDescription: string | null = null;
 
         // Create page record
         const { data: pageData, error: pageError } = await supabase
           .from('book_pages')
           .insert({
             book_id: bookId,
-            page_number: i + 1,
+            page_number: pageNumber,
             image_url: urlData.publicUrl,
             image_description: imageDescription
           })

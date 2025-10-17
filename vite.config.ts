@@ -30,6 +30,8 @@ export default defineConfig({
         target: 'http://localhost:3002',
         changeOrigin: true,
         secure: false,
+        timeout: 300000, // 5 minutes for large file uploads
+        proxyTimeout: 300000, // 5 minutes
         configure: (proxy, _options) => {
           proxy.on('error', (err, _req, _res) => {
             console.log('proxy error', err);
