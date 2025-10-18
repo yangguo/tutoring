@@ -31,7 +31,7 @@ const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: process.env.NODE_ENV === 'production' ? 100 : 10000, // Very lenient in development
   message: 'Too many requests from this IP, please try again later.',
-  skip: (_req) => {
+  skip: () => {
     // Skip rate limiting for development environment
     return process.env.NODE_ENV !== 'production';
   }
@@ -164,11 +164,11 @@ app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
   console.error('Global error handler:', error);
   
   // Multer errors
-  if ((error as any).code === 'LIMIT_FILE_SIZE') {
+  if ('code' in error && error.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({ error: 'File too large. Maximum size is 50MB.' });
   }
   
-  if ((error as any).code === 'LIMIT_UNEXPECTED_FILE') {
+  if ('code' in error && error.code === 'LIMIT_UNEXPECTED_FILE') {
     return res.status(400).json({ error: 'Unexpected file field.' });
   }
   
@@ -182,7 +182,8 @@ app.use((error: Error, _req: Request, res: Response, _next: NextFunction) => {
   }
   
   // Default error
-  res.status((error as any).status || 500).json({
+  const status = 'status' in error && typeof error.status === 'number' ? error.status : 500;
+  res.status(status).json({
     success: false,
     error: error.message || 'Server internal error',
     ...(process.env.NODE_ENV === 'development' && { stack: error.stack })

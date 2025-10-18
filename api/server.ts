@@ -20,8 +20,9 @@ const server = app.listen(PORT, () => {
       if (!checks.env.ok) console.warn('[env]', checks.env.message);
       if (!checks.reach.ok) console.warn('[supabase-reachability]', checks.reach.message);
       if (!checks.query.ok) console.warn('[supabase-query]', checks.query.message);
-    } catch (e: any) {
-      console.warn('[startup-checks] failed to run:', e?.message || e);
+    } catch (e) {
+      const error = e as Error;
+      console.warn('[startup-checks] failed to run:', error?.message || e);
     }
   })();
 });

@@ -19,7 +19,7 @@ interface LessonContext {
   title: string;
   description: string;
   objectives: string[];
-  activities: any[];
+  activities: Array<{ type: string; content: string; duration?: number; description?: string }>;
   target_level: string;
   duration: number;
 }

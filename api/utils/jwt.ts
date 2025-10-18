@@ -23,7 +23,7 @@ export const generateToken = (user: User): string => {
     role: user.role
   };
 
-  // @ts-ignore - JWT accepts string format like '7d', '24h' etc.
+  // @ts-expect-error - JWT accepts string format like '7d', '24h' etc.
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 };
 
@@ -33,7 +33,7 @@ export const generateToken = (user: User): string => {
 export const verifyToken = (token: string): JWTPayload => {
   try {
     return jwt.verify(token, JWT_SECRET) as JWTPayload;
-  } catch (error) {
+  } catch {
     throw new Error('Invalid or expired token');
   }
 };
@@ -62,7 +62,7 @@ export const authenticateToken = (req: Request, res: Response, next: NextFunctio
     const decoded = verifyToken(token);
     req.user = decoded;
     next();
-  } catch (error) {
+  } catch {
     return res.status(403).json({ error: 'Invalid or expired token' });
   }
 };
@@ -71,7 +71,7 @@ export const authenticateToken = (req: Request, res: Response, next: NextFunctio
  * Middleware to check if user has required role
  */
 export const requireRole = (roles: string[]) => {
-  return (req: any, res: any, next: any) => {
+  return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
       return res.status(401).json({ error: 'Authentication required' });
     }
@@ -87,7 +87,7 @@ export const requireRole = (roles: string[]) => {
 /**
  * Middleware to check if user can access child data (parent or the child themselves)
  */
-export const canAccessChildData = async (req: any, res: any, next: any) => {
+export const canAccessChildData = async (req: Request, res: Response, next: NextFunction) => {
   const { userId } = req.params;
   const currentUser = req.user;
 

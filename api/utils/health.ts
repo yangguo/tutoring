@@ -3,10 +3,10 @@ import { supabase } from '../config/supabase.js';
 type CheckResult = {
   ok: boolean
   message: string
-  details?: Record<string, any>
+  details?: Record<string, unknown>
 }
 
-const toBool = (v: any) => v !== undefined && v !== '' && v !== null
+const toBool = (v: unknown) => v !== undefined && v !== '' && v !== null
 
 const fetchWithTimeout = async (url: string, opts: RequestInit = {}, timeoutMs = 3000) => {
   const controller = new AbortController()
@@ -47,8 +47,9 @@ export const checkSupabaseReachable = async (): Promise<CheckResult> => {
     // Any response (even 404) proves connectivity and DNS/SSL are OK
     const res = await fetchWithTimeout(`${base}/rest/v1/`, { method: 'HEAD' }, 3000)
     return { ok: true, message: `Reachable (status ${res.status})` }
-  } catch (e: any) {
-    return { ok: false, message: `Fetch failed: ${e?.message || 'unknown error'}` }
+  } catch (e) {
+    const error = e as Error;
+    return { ok: false, message: `Fetch failed: ${error?.message || 'unknown error'}` }
   }
 }
 
@@ -61,8 +62,9 @@ export const checkSupabaseQuery = async (): Promise<CheckResult> => {
       return { ok: false, message: `Query error: ${error.message}`, details: { ms } }
     }
     return { ok: true, message: `Query ok (${ms}ms)` }
-  } catch (e: any) {
-    return { ok: false, message: `Query failed: ${e?.message || 'unknown error'}` }
+  } catch (e) {
+    const error = e as Error;
+    return { ok: false, message: `Query failed: ${error?.message || 'unknown error'}` }
   }
 }
 
