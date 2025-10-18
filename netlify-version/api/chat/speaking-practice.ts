@@ -133,11 +133,12 @@ export const speakingPracticeChat = async (req: Request, res: Response) => {
       timestamp: new Date().toISOString()
     });
 
-  } catch (error: any) {
+  } catch (error) {
+    const err = error as Error;
     console.error('Error in speaking practice chat:', error);
     res.status(500).json({ 
       error: 'Failed to process chat message',
-      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
 };

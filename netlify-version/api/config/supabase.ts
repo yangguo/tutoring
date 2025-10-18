@@ -130,7 +130,7 @@ export interface Achievement {
   description: string;
   icon_url?: string;
   badge_color: string;
-  criteria: Record<string, any>;
+  criteria: Record<string, unknown>;
   points: number;
   category: 'reading' | 'speaking' | 'vocabulary' | 'streak' | 'special';
   created_at: string;
@@ -173,7 +173,7 @@ export interface PageGlossaryEntry {
   difficulty: 'beginner' | 'intermediate' | 'advanced' | 'challenging';
   confidence: number;
   position: GlossaryPosition;
-  metadata: Record<string, any> | null;
+  metadata: Record<string, unknown> | null;
   created_by?: string | null;
   created_at: string;
 }

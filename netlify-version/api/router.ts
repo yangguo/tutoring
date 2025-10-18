@@ -344,10 +344,12 @@ const composeEntryMetadata = (
   return payload;
 };
 
-const transformStoredGlossaryEntry = (entry: Record<string, any>) => {
+const transformStoredGlossaryEntry = (entry: Record<string, unknown>) => {
   const {
     metadata,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     difficulty: _difficulty,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     confidence: _confidence,
     ...rest
   } = entry;
@@ -388,7 +390,7 @@ const transformStoredGlossaryEntry = (entry: Record<string, any>) => {
   };
 };
 
-const prepareGlossaryResponseEntries = (entries: Record<string, any>[]) =>
+const prepareGlossaryResponseEntries = (entries: Record<string, unknown>[]) =>
   entries.map(transformStoredGlossaryEntry);
 
 
@@ -615,7 +617,7 @@ router.post('/achievements/award', authenticateToken, requireRole(['admin']), as
     }
 
     res.status(201).json({
-      message: `Achievement \"${achievement.title}\" awarded to ${user.username}`,
+      message: `Achievement "${achievement.title}" awarded to ${user.username}`,
       userAchievement,
       achievement
     });
