@@ -51,14 +51,24 @@ export interface GlossaryPosition {
   height: number;
 }
 
+export interface GlossaryDuplicateMeaning {
+  definition: string;
+  translation: string;
+  pronunciation?: string | null;
+  example_sentence?: string | null;
+  notes?: string | null;
+}
+
 export interface PageGlossaryEntry {
   id: string;
   page_id: string;
   word: string;
   definition: string;
   translation: string;
-  difficulty: 'beginner' | 'intermediate' | 'advanced' | 'challenging';
-  confidence: number;
+  pronunciation: string | null;
+  example_sentence: string | null;
+  duplicate_meanings: GlossaryDuplicateMeaning[];
+  notes?: string | null;
   position: GlossaryPosition;
   metadata?: Record<string, any> | null;
   created_by?: string | null;

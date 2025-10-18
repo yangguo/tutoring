@@ -202,6 +202,41 @@ type ExtractVocabularyPayload = {
   max_words?: number;
 };
 
+type GlossaryBoundingBox = {
+  top?: number;
+  left?: number;
+  width?: number;
+  height?: number;
+};
+
+type GlossaryPosition = {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+};
+
+type GlossaryDuplicateMeaning = {
+  definition: string;
+  translation: string;
+  pronunciation?: string | null;
+  example_sentence?: string | null;
+  notes?: string | null;
+};
+
+type GlossaryAnalysisEntry = {
+  word: string;
+  definition: string;
+  translation: string;
+  pronunciation?: string | null;
+  example_sentence?: string | null;
+  bounding_box?: GlossaryBoundingBox;
+  notes?: string;
+  position?: GlossaryPosition;
+  duplicate_meanings?: GlossaryDuplicateMeaning[];
+  metadata?: Record<string, unknown>;
+};
+
 const books = new Hono<BooksBindings>();
 
 // Global error handler middleware
@@ -571,15 +606,17 @@ books.get('/pages/:pageId/glossary', async (c) => {
       .from('page_glossary_entries')
       .select('*')
       .eq('page_id', pageId)
-      .order('confidence', { ascending: false })
-      .order('word', { ascending: true });
+      .order('word', { ascending: true })
+      .order('created_at', { ascending: true });
 
     if (error) {
       logger.error('Failed to fetch page glossary entries', error, { pageId });
       return c.json({ error: 'Failed to fetch glossary entries' }, 500);
     }
 
-    return c.json({ entries: data ?? [] });
+    const entries = Array.isArray(data) ? prepareGlossaryResponseEntries(data) : [];
+
+    return c.json({ entries });
   } catch (error) {
     logger.error('Unexpected glossary fetch error', error);
     return c.json({ error: 'Internal server error' }, 500);
@@ -648,19 +685,7 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
       return c.json({ error: 'Book not found for the requested page' }, 404);
     }
 
-    interface AiGlossaryEntry {
-      word: string;
-      definition: string;
-      translation: string;
-      difficulty?: string;
-      confidence?: number;
-      bounding_box?: { top?: number; left?: number; width?: number; height?: number };
-      notes?: string;
-      position?: { top: number; left: number; width: number; height: number };
-      metadata?: Record<string, unknown>;
-    }
-
-    let aiEntries: AiGlossaryEntry[] = [];
+    let aiEntries: GlossaryAnalysisEntry[] = [];
 
     const openAiAvailable = Boolean(
       c.env.OPENAI_API_KEY &&
@@ -696,9 +721,10 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
 
       const promptInstruction = `You are assisting a parent who supports an English learner at the primary school level. ` +
         `Analyze the provided book page image and identify up to ${maxEntries} English words or short phrases that a primary school student might find challenging. ` +
-        `You must respond with a single JSON object matching this schema: { "entries": [ { "word": string, "definition": string, ` +
-        `"translation": string, "difficulty": "beginner" | "intermediate" | "advanced" | "challenging", ` +
-        `"confidence": number between 0 and 1, "bounding_box": { "top": number, "left": number, "width": number, "height": number }, "notes"?: string } ] }. ` +
+        `Respond with a single JSON object matching this schema: { "entries": [ { "word": string, "definition": string, ` +
+        `"translation": string, "pronunciation": string, "example_sentence": string, "bounding_box": { "top": number, "left": number, "width": number, "height": number }, ` +
+        `"notes"?: string, "duplicate_meanings"?: [ { "definition": string, "translation": string, "pronunciation"?: string, "example_sentence"?: string, "notes"?: string } ] } ] }. ` +
+        `If you encounter multiple meanings for the same word, include the additional meanings inside duplicate_meanings for that entry so they appear after the primary meaning. ` +
         `IMPORTANT: All bounding_box coordinates must be normalized between 0 and 1 relative to the image dimensions. ` +
         `For example, if a word is at the top-left corner, use top: 0, left: 0. If at bottom-right, use top: 0.9, left: 0.9. ` +
         `Width and height should also be normalized (e.g., width: 0.1 means 10% of image width). ` +
@@ -805,16 +831,25 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
 
           if (Array.isArray(maybeEntries) && maybeEntries.length > 0) {
             aiEntries = maybeEntries
-              .map((entry: any) => ({
-                word: typeof entry?.word === 'string' ? entry.word.trim() : '',
-                definition: typeof entry?.definition === 'string' ? entry.definition.trim() : '',
-                translation: typeof entry?.translation === 'string' ? entry.translation.trim() : '',
-                difficulty: entry?.difficulty,
-                confidence: entry?.confidence,
-                bounding_box: entry?.bounding_box,
-                notes: typeof entry?.notes === 'string' ? entry.notes : undefined,
-                metadata: typeof entry?.metadata === 'object' && entry?.metadata !== null ? entry.metadata : undefined
-              }))
+              .map((entry: any) => {
+                const metadata = isRecord(entry?.metadata) ? entry.metadata : undefined;
+                const duplicateMeaningsSource = entry?.duplicate_meanings ?? metadata?.duplicate_meanings;
+                const duplicate_meanings = normalizeDuplicateMeanings(duplicateMeaningsSource);
+                const pronunciation = typeof entry?.pronunciation === 'string' ? entry.pronunciation.trim() : null;
+                const example_sentence = typeof entry?.example_sentence === 'string' ? entry.example_sentence.trim() : null;
+
+                return {
+                  word: typeof entry?.word === 'string' ? entry.word.trim() : '',
+                  definition: typeof entry?.definition === 'string' ? entry.definition.trim() : '',
+                  translation: typeof entry?.translation === 'string' ? entry.translation.trim() : '',
+                  pronunciation,
+                  example_sentence,
+                  bounding_box: entry?.bounding_box,
+                  notes: typeof entry?.notes === 'string' ? entry.notes : undefined,
+                  duplicate_meanings: duplicate_meanings.length ? duplicate_meanings : undefined,
+                  metadata
+                } as GlossaryAnalysisEntry;
+              })
               .filter(entry => entry.word && entry.definition && entry.translation);
           }
         }
@@ -835,17 +870,13 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
       metadata.ai_disabled = true;
     }
 
+    if (aiEntries.length) {
+      aiEntries = mergeDuplicateEntries(aiEntries);
+    }
+
     if (!aiEntries.length) {
       const fallbackEntries = generateFallbackGlossaryFromText(page.text_content, maxEntries);
-      aiEntries = fallbackEntries.map(entry => ({
-        word: entry.word,
-        definition: entry.definition,
-        translation: entry.translation,
-        difficulty: entry.difficulty,
-        confidence: entry.confidence,
-        position: entry.position,
-        metadata: entry.metadata
-      }));
+      aiEntries = mergeDuplicateEntries(fallbackEntries);
       metadata.fallback_used = true;
     }
 
@@ -884,24 +915,30 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
         rawBoundingBox: entry.bounding_box ?? null
       });
 
-      const source = entry.metadata?.source
+      const sourceFromMetadata = isRecord(entry.metadata) && typeof entry.metadata['source'] === 'string'
+        ? (entry.metadata['source'] as string)
+        : undefined;
+
+      const source = sourceFromMetadata
         ?? (metadata.fallback_used === true || !openAiAvailable ? 'fallback-text' : 'openai-vision');
+
+      const metadataPayload = composeEntryMetadata(
+        {
+          ...metadata
+        },
+        entry,
+        source
+      );
 
       return {
         page_id: pageId,
         word: entry.word,
         definition: entry.definition,
         translation: entry.translation,
-        difficulty: normalizeDifficulty(entry.difficulty),
-        confidence: clamp01(entry.confidence, 0.6),
+        difficulty: null,
+        confidence: null,
         position: normalizedPosition,
-        metadata: {
-          ...metadata,
-          ...(entry.metadata ?? {}),
-          notes: entry.notes,
-          source,
-          raw_bounding_box: entry.bounding_box ?? null
-        },
+        metadata: metadataPayload,
         created_by: user.userId
       };
     });
@@ -916,11 +953,13 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
       return c.json({ error: 'Failed to store glossary entries' }, 500);
     }
 
+    const responseEntries = Array.isArray(inserted) ? prepareGlossaryResponseEntries(inserted) : [];
+
     return c.json({
       message: 'Glossary generated successfully',
-      entries: inserted ?? [],
+      entries: responseEntries,
       used_fallback: metadata.fallback_used === true,
-      total: inserted?.length ?? 0
+      total: responseEntries.length
     });
   } catch (error) {
     logger.error('Unexpected glossary analysis error', error, { pageId: c.req.param('pageId') });
@@ -1085,8 +1124,6 @@ function generateBasicImageDescription(_imageUrl: string, context?: string): str
   return contextDescriptions[contextKey as keyof typeof contextDescriptions] || contextDescriptions.default;
 }
 
-type DifficultyLevel = 'beginner' | 'intermediate' | 'advanced' | 'challenging';
-
 const clamp01 = (value: unknown, fallback = 0): number => {
   const num = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''));
   if (!Number.isFinite(num)) {
@@ -1095,18 +1132,6 @@ const clamp01 = (value: unknown, fallback = 0): number => {
   if (num < 0) return 0;
   if (num > 1) return 1;
   return Number(num.toFixed(4));
-};
-
-const normalizeDifficulty = (value: unknown): DifficultyLevel => {
-  if (typeof value !== 'string') return 'challenging';
-  const normalized = value.toLowerCase();
-  if (normalized === 'beginner' || normalized === 'intermediate' || normalized === 'advanced' || normalized === 'challenging') {
-    return normalized;
-  }
-  if (normalized === 'easy') return 'beginner';
-  if (normalized === 'medium' || normalized === 'moderate') return 'intermediate';
-  if (normalized === 'hard' || normalized === 'difficult') return 'advanced';
-  return 'challenging';
 };
 
 const createFallbackPosition = (index: number, total: number) => {
@@ -1131,17 +1156,7 @@ const createFallbackPosition = (index: number, total: number) => {
   return { top, left, width, height };
 };
 
-type FallbackGlossaryEntry = {
-  word: string;
-  definition: string;
-  translation: string;
-  difficulty: DifficultyLevel;
-  confidence: number;
-  position: { top: number; left: number; width: number; height: number };
-  metadata?: Record<string, unknown>;
-};
-
-const generateFallbackGlossaryFromText = (text: string | null | undefined, maxEntries = 6): FallbackGlossaryEntry[] => {
+const generateFallbackGlossaryFromText = (text: string | null | undefined, maxEntries = 6): GlossaryAnalysisEntry[] => {
   if (!text) return [];
 
   const sanitized = text.toLowerCase().replace(/[^a-z\s-]/g, ' ');
@@ -1169,12 +1184,213 @@ const generateFallbackGlossaryFromText = (text: string | null | undefined, maxEn
     word,
     definition: `Definition for "${word}" is not available in offline mode.`,
     translation: `${word}（待翻译）`,
-    difficulty: word.length > 8 ? 'advanced' : 'challenging',
-    confidence: 0.35,
+    pronunciation: null,
+    example_sentence: null,
     position: createFallbackPosition(index, candidates.length),
+    notes: 'Generated without AI vision OCR.',
     metadata: { source: 'fallback-text', note: 'Generated without AI vision OCR' }
   }));
 };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const normalizeDuplicateMeanings = (value: unknown): GlossaryDuplicateMeaning[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map(item => {
+      if (!isRecord(item)) return null;
+
+      const definition = typeof item.definition === 'string' ? item.definition.trim() : '';
+      const translation = typeof item.translation === 'string' ? item.translation.trim() : '';
+      const pronunciation = typeof item.pronunciation === 'string' ? item.pronunciation.trim() : null;
+      const example_sentence = typeof item.example_sentence === 'string' ? item.example_sentence.trim() : null;
+      const notes = typeof item.notes === 'string' ? item.notes.trim() : null;
+
+      if (!definition && !translation) {
+        return null;
+      }
+
+      const duplicate: GlossaryDuplicateMeaning = {
+        definition,
+        translation,
+        pronunciation,
+        example_sentence,
+        notes
+      };
+
+      return duplicate;
+    })
+    .filter((entry): entry is GlossaryDuplicateMeaning => entry !== null);
+};
+
+const mergeDuplicateEntries = (entries: GlossaryAnalysisEntry[]): GlossaryAnalysisEntry[] => {
+  const seen = new Map<string, GlossaryAnalysisEntry>();
+  const ordered: GlossaryAnalysisEntry[] = [];
+
+  for (const entry of entries) {
+    const key = typeof entry.word === 'string' ? entry.word.trim().toLowerCase() : '';
+
+    if (!key) {
+      ordered.push(entry);
+      continue;
+    }
+
+    const existing = seen.get(key);
+
+    if (!existing) {
+      const normalizedDuplicates = entry.duplicate_meanings
+        ? normalizeDuplicateMeanings(entry.duplicate_meanings)
+        : [];
+
+      const initialEntry: GlossaryAnalysisEntry = {
+        ...entry,
+        duplicate_meanings: normalizedDuplicates.length ? normalizedDuplicates : undefined
+      };
+
+      seen.set(key, initialEntry);
+      ordered.push(initialEntry);
+      continue;
+    }
+
+    const duplicates = existing.duplicate_meanings ?? [];
+    duplicates.push({
+      definition: entry.definition,
+      translation: entry.translation,
+      pronunciation: entry.pronunciation ?? null,
+      example_sentence: entry.example_sentence ?? null,
+      notes: entry.notes ?? null
+    });
+
+    existing.duplicate_meanings = duplicates;
+
+    if (entry.metadata) {
+      existing.metadata = {
+        ...(existing.metadata ?? {}),
+        ...entry.metadata
+      };
+    }
+
+    if (!existing.notes && entry.notes) {
+      existing.notes = entry.notes;
+    }
+  }
+
+  return ordered;
+};
+
+const composeEntryMetadata = (
+  baseMetadata: Record<string, unknown>,
+  entry: GlossaryAnalysisEntry,
+  source: string
+): Record<string, unknown> => {
+  const payload: Record<string, unknown> = {
+    ...baseMetadata,
+    ...(entry.metadata ?? {})
+  };
+
+  if (typeof entry.notes === 'string') {
+    const trimmed = entry.notes.trim();
+    if (trimmed) {
+      payload.notes = trimmed;
+    } else if (typeof payload.notes === 'string' && !payload.notes.trim()) {
+      delete payload.notes;
+    }
+  } else if (typeof payload.notes === 'string') {
+    const trimmed = payload.notes.trim();
+    if (trimmed) {
+      payload.notes = trimmed;
+    } else {
+      delete payload.notes;
+    }
+  }
+
+  if (typeof entry.pronunciation === 'string' && entry.pronunciation.trim()) {
+    payload.pronunciation = entry.pronunciation.trim();
+  } else if (typeof payload.pronunciation === 'string') {
+    const trimmed = payload.pronunciation.trim();
+    if (trimmed) {
+      payload.pronunciation = trimmed;
+    } else {
+      delete payload.pronunciation;
+    }
+  }
+
+  if (typeof entry.example_sentence === 'string' && entry.example_sentence.trim()) {
+    payload.example_sentence = entry.example_sentence.trim();
+  } else if (typeof payload.example_sentence === 'string') {
+    const trimmed = payload.example_sentence.trim();
+    if (trimmed) {
+      payload.example_sentence = trimmed;
+    } else {
+      delete payload.example_sentence;
+    }
+  }
+
+  payload.source = source;
+  payload.raw_bounding_box = entry.bounding_box ?? null;
+
+  if (entry.duplicate_meanings && entry.duplicate_meanings.length > 0) {
+    payload.duplicate_meanings = entry.duplicate_meanings;
+  } else if ('duplicate_meanings' in payload) {
+    const duplicates = payload.duplicate_meanings;
+    if (!Array.isArray(duplicates) || duplicates.length === 0) {
+      delete payload.duplicate_meanings;
+    }
+  }
+
+  return payload;
+};
+
+const transformStoredGlossaryEntry = (entry: Record<string, any>) => {
+  const {
+    metadata,
+    difficulty: _difficulty,
+    confidence: _confidence,
+    ...rest
+  } = entry;
+
+  const metadataRecord = isRecord(metadata) ? metadata : {};
+
+  const pronunciation = typeof metadataRecord.pronunciation === 'string'
+    ? metadataRecord.pronunciation
+    : null;
+  const example_sentence = typeof metadataRecord.example_sentence === 'string'
+    ? metadataRecord.example_sentence
+    : null;
+  const notes = typeof metadataRecord.notes === 'string'
+    ? metadataRecord.notes
+    : undefined;
+  const duplicate_meanings = normalizeDuplicateMeanings(metadataRecord.duplicate_meanings);
+
+  const metadataForResponse: Record<string, unknown> = { ...metadataRecord };
+  delete metadataForResponse.pronunciation;
+  delete metadataForResponse.example_sentence;
+  delete metadataForResponse.duplicate_meanings;
+
+  if (notes !== undefined) {
+    metadataForResponse.notes = notes;
+  } else {
+    delete metadataForResponse.notes;
+  }
+
+  const cleanedMetadata = Object.keys(metadataForResponse).length > 0 ? metadataForResponse : null;
+
+  return {
+    ...rest,
+    pronunciation,
+    example_sentence,
+    duplicate_meanings,
+    notes,
+    metadata: cleanedMetadata
+  };
+};
+
+const prepareGlossaryResponseEntries = (entries: Record<string, any>[]) =>
+  entries.map(transformStoredGlossaryEntry);
 
 const attemptRepairJsonResponse = (rawContent: string): string | null => {
   if (!rawContent) return null;
