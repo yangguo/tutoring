@@ -20,7 +20,7 @@ import {
   MessageCircle,
   RefreshCw
 } from 'lucide-react';
-import { api, Book, BookPage, DiscussionMessage, API_BASE_URL, PageGlossaryEntry } from '../lib/api';
+import { api, Book, BookPage, DiscussionMessage, API_BASE_URL, PageGlossaryEntry, GlossaryDuplicateMeaning } from '../lib/api';
 import ChatInterface from '../components/ChatInterface';
 import { convertPdfFileToImages, getPdfPageCount, extractPdfTextPerPage } from '../lib/pdf';
 import { useAuthStore } from '../stores/authStore';
@@ -82,6 +82,35 @@ const ReadingSession: React.FC = () => {
     () => glossaryEntries.find(entry => entry.id === activeGlossaryEntryId) || null,
     [glossaryEntries, activeGlossaryEntryId]
   );
+
+  const activeGlossaryDetails = useMemo(() => {
+    if (!activeGlossaryEntry) {
+      return {
+        pronunciation: null as string | null,
+        exampleSentence: null as string | null,
+        notes: null as string | null,
+        duplicateMeanings: [] as GlossaryDuplicateMeaning[]
+      };
+    }
+
+    const metadata = (activeGlossaryEntry.metadata ?? {}) as Record<string, any>;
+    const pronunciation =
+      activeGlossaryEntry.pronunciation ??
+      (typeof metadata.pronunciation === 'string' ? metadata.pronunciation : null);
+    const exampleSentence =
+      activeGlossaryEntry.example_sentence ??
+      (typeof metadata.example_sentence === 'string' ? metadata.example_sentence : null);
+    const notes =
+      activeGlossaryEntry.notes ??
+      (typeof metadata.notes === 'string' ? metadata.notes : null);
+    const duplicateMeanings = Array.isArray(activeGlossaryEntry.duplicate_meanings)
+      ? activeGlossaryEntry.duplicate_meanings
+      : Array.isArray(metadata.duplicate_meanings)
+        ? (metadata.duplicate_meanings as GlossaryDuplicateMeaning[])
+        : [];
+
+    return { pronunciation, exampleSentence, notes, duplicateMeanings };
+  }, [activeGlossaryEntry]);
 
   useEffect(() => {
     if (bookId) {
@@ -1346,21 +1375,52 @@ const ReadingSession: React.FC = () => {
                             ✕
                           </button>
                         </div>
-                        <p className="mt-3 text-sm text-gray-700 dark:text-gray-200 leading-relaxed">
-                          {activeGlossaryEntry.definition}
-                        </p>
-                        <div className="mt-4 flex items-center justify-between text-xs text-gray-500 dark:text-gray-300">
-                          <span className="uppercase tracking-wide">
-                            Difficulty: {activeGlossaryEntry.difficulty}
-                          </span>
-                          <span>
-                            Confidence: {Math.round((activeGlossaryEntry.confidence ?? 0) * 100)}%
-                          </span>
+                        <div className="mt-3 space-y-2 text-sm text-gray-700 dark:text-gray-200 leading-relaxed">
+                          <p>{activeGlossaryEntry.definition}</p>
+                          {activeGlossaryDetails.pronunciation && (
+                            <p className="text-xs font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-300">
+                              Pronunciation: <span className="normal-case font-semibold text-gray-700 dark:text-gray-100">{activeGlossaryDetails.pronunciation}</span>
+                            </p>
+                          )}
+                          {activeGlossaryDetails.exampleSentence && (
+                            <p className="text-xs italic text-gray-600 dark:text-gray-300">
+                              “{activeGlossaryDetails.exampleSentence}”
+                            </p>
+                          )}
                         </div>
-                        {activeGlossaryEntry.metadata?.notes && (
-                          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                            {activeGlossaryEntry.metadata.notes}
+                        {activeGlossaryDetails.notes && (
+                          <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
+                            {activeGlossaryDetails.notes}
                           </p>
+                        )}
+                        {activeGlossaryDetails.duplicateMeanings.length > 0 && (
+                          <div className="mt-4 border-t border-blue-100 pt-3 dark:border-blue-500/30">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-700 dark:text-blue-300">
+                              Additional Meanings
+                            </p>
+                            <ul className="mt-2 space-y-2">
+                              {activeGlossaryDetails.duplicateMeanings.map((duplicate, index) => (
+                                <li
+                                  key={`${duplicate.definition}-${index}`}
+                                  className="rounded-md bg-blue-50/70 p-2 text-[11px] text-blue-900 dark:bg-blue-900/30 dark:text-blue-100"
+                                >
+                                  <p className="font-medium text-blue-800 dark:text-blue-100">{duplicate.definition}</p>
+                                  {duplicate.translation && (
+                                    <p className="text-[11px] text-blue-700/80 dark:text-blue-200/80">Translation: {duplicate.translation}</p>
+                                  )}
+                                  {duplicate.pronunciation && (
+                                    <p className="text-[11px] text-blue-700/80 dark:text-blue-200/80">Pronunciation: {duplicate.pronunciation}</p>
+                                  )}
+                                  {duplicate.example_sentence && (
+                                    <p className="text-[11px] italic text-blue-700/80 dark:text-blue-200/80">“{duplicate.example_sentence}”</p>
+                                  )}
+                                  {duplicate.notes && (
+                                    <p className="text-[11px] text-blue-600/80 dark:text-blue-200/80">{duplicate.notes}</p>
+                                  )}
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
                         )}
                       </div>
                     )}

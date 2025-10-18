@@ -1231,6 +1231,21 @@ const mergeDuplicateEntries = (entries: GlossaryAnalysisEntry[]): GlossaryAnalys
   const seen = new Map<string, GlossaryAnalysisEntry>();
   const ordered: GlossaryAnalysisEntry[] = [];
 
+  const mergeBoundingBox = (current: GlossaryBoundingBox | undefined, incoming: GlossaryBoundingBox | undefined) => {
+    if (!incoming) return current;
+    if (!current) return { ...incoming };
+
+    const merged: GlossaryBoundingBox = { ...current };
+    for (const key of ['top', 'left', 'width', 'height'] as const) {
+      const currentValue = typeof merged[key] === 'number' ? merged[key] : undefined;
+      const incomingValue = typeof incoming[key] === 'number' ? incoming[key] : undefined;
+      if (incomingValue !== undefined && currentValue === undefined) {
+        merged[key] = incomingValue;
+      }
+    }
+    return merged;
+  };
+
   for (const entry of entries) {
     const key = typeof entry.word === 'string' ? entry.word.trim().toLowerCase() : '';
 
@@ -1267,15 +1282,29 @@ const mergeDuplicateEntries = (entries: GlossaryAnalysisEntry[]): GlossaryAnalys
 
     existing.duplicate_meanings = duplicates;
 
+    if (!existing.pronunciation && entry.pronunciation) {
+      existing.pronunciation = entry.pronunciation;
+    }
+
+    if (!existing.example_sentence && entry.example_sentence) {
+      existing.example_sentence = entry.example_sentence;
+    }
+
+    if (!existing.notes && entry.notes) {
+      existing.notes = entry.notes;
+    }
+
+    existing.bounding_box = mergeBoundingBox(existing.bounding_box, entry.bounding_box);
+
+    if (!existing.position && entry.position) {
+      existing.position = entry.position;
+    }
+
     if (entry.metadata) {
       existing.metadata = {
         ...(existing.metadata ?? {}),
         ...entry.metadata
       };
-    }
-
-    if (!existing.notes && entry.notes) {
-      existing.notes = entry.notes;
     }
   }
 
