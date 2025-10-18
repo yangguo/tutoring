@@ -715,7 +715,9 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
       const baseTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
       const glossaryTimeoutMs = Number.isFinite(parsedGlossaryTimeout) && parsedGlossaryTimeout > 0 ? parsedGlossaryTimeout : 300_000;
       const timeoutMs = Math.max(baseTimeoutMs, glossaryTimeoutMs);
+      const cappedTimeoutMs = Math.min(timeoutMs, 55_000); // Cloudflare Workers have a ~60s execution limit
       metadata.glossary_timeout_ms = timeoutMs;
+      metadata.glossary_timeout_effective_ms = cappedTimeoutMs;
 
       const visionModel = c.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
       metadata.openai_model = visionModel;
@@ -759,7 +761,10 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
       const startTime = Date.now();
 
       try {
-        timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        timeoutId = setTimeout(() => {
+          controller.abort();
+          metadata.timeout_occurred = true;
+        }, cappedTimeoutMs);
 
         const response = await fetch(`${baseUrl}/chat/completions`, {
           method: 'POST',
@@ -857,7 +862,7 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') {
           metadata.timeout_occurred = true;
-          logger.warn('Glossary analysis request aborted due to timeout', { pageId, timeoutMs });
+          logger.warn('Glossary analysis request aborted due to timeout', { pageId, timeoutMs: cappedTimeoutMs });
         } else {
           metadata.request_error = error instanceof Error ? error.message : String(error);
           logger.error('Glossary analysis request failed', error, { pageId });
