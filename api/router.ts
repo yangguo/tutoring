@@ -347,9 +347,9 @@ const composeEntryMetadata = (
 const transformStoredGlossaryEntry = (entry: Record<string, unknown>) => {
   const {
     metadata,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Intentionally unused in destructuring
     difficulty: _difficulty,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Intentionally unused in destructuring
     confidence: _confidence,
     ...rest
   } = entry;
