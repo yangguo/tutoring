@@ -17,8 +17,20 @@ type UploadBindings = {
 
 const upload = new Hono<UploadBindings>();
 
+interface BookMetadata {
+  title?: string;
+  author?: string;
+  target_age_min?: number;
+  target_age_max?: number;
+  difficulty_level?: string;
+  category?: string;
+  language?: string;
+  summary?: string;
+  [key: string]: unknown;
+}
+
 // Validation schema for book metadata
-const validateBookMetadata = (data: any) => {
+const validateBookMetadata = (data: BookMetadata) => {
   const errors: string[] = [];
   
   if (!data.title || typeof data.title !== 'string') {
@@ -116,7 +128,7 @@ upload.post('/book', async (c) => {
 
     // Upload file to Supabase Storage
     console.log(`[Upload] Uploading to storage: ${filePath}`);
-    const { data: uploadData, error: uploadError } = await supabase.storage
+    const { error: uploadError } = await supabase.storage
       .from('book-files')
       .upload(filePath, fileBuffer, {
         contentType: file.type,
@@ -446,7 +458,7 @@ upload.get('/books', async (c) => {
         const buffer = await file.arrayBuffer();
         const filePath = `books/${userId}/${bookId}/pages/page-${pageNumber}.png`;
 
-        const { data: uploadData, error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
           .from('book-files')
           .upload(filePath, buffer, {
             contentType: 'image/png',

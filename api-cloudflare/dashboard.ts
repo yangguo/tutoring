@@ -14,7 +14,20 @@ type DashboardBindings = {
 
 const dashboard = new Hono<DashboardBindings>();
 
-function buildLessonResponse(lesson: any) {
+interface LessonData {
+  id: string;
+  title: string;
+  description: string;
+  target_level: string;
+  duration: number;
+  objectives?: string[];
+  activities?: unknown[];
+  book_ids?: string[];
+  created_by?: string;
+  created_at?: string;
+}
+
+function buildLessonResponse(lesson: LessonData) {
   return {
     id: lesson.id,
     title: lesson.title,
@@ -66,17 +79,25 @@ dashboard.get('/students', async (c) => {
       const speakingSessions = student.speaking_sessions || [];
       const vocabulary = student.user_vocabulary || [];
 
-      const totalReadingTime = readingSessions.reduce((sum: number, session: any) => sum + (session.duration || 0), 0);
+      interface Session {
+        duration?: number;
+        comprehension_score?: number;
+        pronunciation_score?: number;
+        fluency_score?: number;
+        accuracy_score?: number;
+      }
+      
+      const totalReadingTime = readingSessions.reduce((sum: number, session: Session) => sum + (session.duration || 0), 0);
       const booksCompleted = readingSessions.length;
       const vocabularyLearned = vocabulary.length;
 
       const avgComprehension = readingSessions.length
-        ? readingSessions.reduce((sum: number, session: any) => sum + (session.comprehension_score || 0), 0) /
+        ? readingSessions.reduce((sum: number, session: Session) => sum + (session.comprehension_score || 0), 0) /
           readingSessions.length
         : 0;
 
       const avgSpeaking = speakingSessions.length
-        ? speakingSessions.reduce((sum: number, session: any) => {
+        ? speakingSessions.reduce((sum: number, session: Session) => {
             const sessionAverage =
               ((session.pronunciation_score || 0) + (session.fluency_score || 0) + (session.accuracy_score || 0)) / 3;
             return sum + sessionAverage;

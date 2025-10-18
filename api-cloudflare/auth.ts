@@ -13,7 +13,18 @@ type AuthBindings = {
 
 const auth = new Hono<AuthBindings>();
 
-const formatProfileResponse = (profile: any) => ({
+interface UserProfile {
+  id: string;
+  email: string;
+  username?: string;
+  full_name?: string;
+  role: string;
+  age?: number | null;
+  grade_level?: string | null;
+  parent_email?: string | null;
+}
+
+const formatProfileResponse = (profile: UserProfile) => ({
   id: profile.id,
   email: profile.email,
   username: profile.username ?? profile.full_name ?? profile.email,

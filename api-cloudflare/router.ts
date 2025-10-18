@@ -56,7 +56,7 @@ app.get('/api/health/detailed', async (c) => {
 
   try {
     const supabase = createSupabaseClient(c.env);
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from('books')
       .select('count(*)')
       .limit(1);

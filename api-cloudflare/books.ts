@@ -823,15 +823,16 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
             logger.info('No message content received from AI response', { pageId });
           }
 
-          const maybeEntries = structuredPayload && Array.isArray((structuredPayload as any).entries)
-            ? (structuredPayload as any).entries
-            : Array.isArray(structuredPayload)
-              ? structuredPayload
+          const structuredObj = structuredPayload as { entries?: unknown[] } | unknown[] | null;
+          const maybeEntries = structuredObj && typeof structuredObj === 'object' && 'entries' in structuredObj && Array.isArray(structuredObj.entries)
+            ? structuredObj.entries
+            : Array.isArray(structuredObj)
+              ? structuredObj
               : [];
 
           if (Array.isArray(maybeEntries) && maybeEntries.length > 0) {
             aiEntries = maybeEntries
-              .map((entry: any) => {
+              .map((entry: unknown) => {
                 const metadata = isRecord(entry?.metadata) ? entry.metadata : undefined;
                 const duplicateMeaningsSource = entry?.duplicate_meanings ?? metadata?.duplicate_meanings;
                 const duplicate_meanings = normalizeDuplicateMeanings(duplicateMeaningsSource);
@@ -1374,10 +1375,12 @@ const composeEntryMetadata = (
   return payload;
 };
 
-const transformStoredGlossaryEntry = (entry: Record<string, any>) => {
+const transformStoredGlossaryEntry = (entry: Record<string, unknown>) => {
   const {
     metadata,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     difficulty: _difficulty,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     confidence: _confidence,
     ...rest
   } = entry;
@@ -1418,7 +1421,7 @@ const transformStoredGlossaryEntry = (entry: Record<string, any>) => {
   };
 };
 
-const prepareGlossaryResponseEntries = (entries: Record<string, any>[]) =>
+const prepareGlossaryResponseEntries = (entries: Record<string, unknown>[]) =>
   entries.map(transformStoredGlossaryEntry);
 
 const attemptRepairJsonResponse = (rawContent: string): string | null => {

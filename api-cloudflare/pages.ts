@@ -107,7 +107,7 @@ pages.post('/:bookId/pages', async (c) => {
         const uint8Array = new Uint8Array(buffer);
 
         // Upload file to Supabase Storage
-        const { data: _uploadData, error: uploadError } = await supabase.storage
+        const { error: uploadError } = await supabase.storage
           .from('book-files')
           .upload(filePath, uint8Array, {
             contentType: file.type,
@@ -213,7 +213,7 @@ pages.post('/:bookId/pages', async (c) => {
           image_url: pageData.image_url,
           filename: file.name
         });
-      } catch (error) {
+      } catch {
         failedUploads.push({ filename: file.name, error: 'Processing error' });
       }
     }

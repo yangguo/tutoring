@@ -15,7 +15,7 @@ export type SessionPayload = {
 export async function verifyToken(token: string, secret: string): Promise<SessionPayload | null> {
   try {
     return (await verify(token, secret)) as SessionPayload;
-  } catch (e) {
+  } catch {
     return null;
   }
 }
