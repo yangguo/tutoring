@@ -3390,37 +3390,7 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
   }
 });
 
-router.get('/upload/books', authenticateToken, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { userId } = (req as any).user;
-    const { page = 1, limit = 10 } = req.query;
-    
-    const offset = (Number(page) - 1) * Number(limit);
-
-    const { data: books, error } = await supabase
-      .from('books')
-      .select('*')
-      .eq('uploaded_by', userId)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + Number(limit) - 1);
-
-    if (error) {
-      res.status(500).json({ error: 'Failed to fetch books' });
-      return;
-    }
-
-    res.json({
-      books: books || [],
-      page: Number(page),
-      limit: Number(limit)
-    });
-  } catch (error) {
-    console.error('Get books error:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-router.delete('/upload/book/:bookId', authenticateToken, requireRole(['parent', 'admin']), async (req: Request, res: Response): Promise<void> => {
+const deleteBookHandler = async (req: Request, res: Response): Promise<void> => {
   try {
     const { bookId } = req.params;
     const { userId } = (req as any).user;
@@ -3480,6 +3450,39 @@ router.delete('/upload/book/:bookId', authenticateToken, requireRole(['parent', 
     console.error('Delete book error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
+};
+
+router.get('/upload/books', authenticateToken, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { userId } = (req as any).user;
+    const { page = 1, limit = 10 } = req.query;
+    
+    const offset = (Number(page) - 1) * Number(limit);
+
+    const { data: books, error } = await supabase
+      .from('books')
+      .select('*')
+      .eq('uploaded_by', userId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + Number(limit) - 1);
+
+    if (error) {
+      res.status(500).json({ error: 'Failed to fetch books' });
+      return;
+    }
+
+    res.json({
+      books: books || [],
+      page: Number(page),
+      limit: Number(limit)
+    });
+  } catch (error) {
+    console.error('Get books error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
+
+router.delete('/upload/book/:bookId', authenticateToken, requireRole(['parent', 'admin']), deleteBookHandler);
+router.delete('/library/:bookId', authenticateToken, requireRole(['parent', 'admin']), deleteBookHandler);
 
 export default router;
