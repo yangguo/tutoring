@@ -47,8 +47,8 @@ const logger = {
 };
 
 const INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10MB limit for inline images
-const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 45_000; // 45 seconds to allow for OpenAI API variability
-const OPENAI_RETRY_ATTEMPTS = 2; // Number of retry attempts for failed requests
+const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 120_000; // 120 seconds to handle complex image processing
+const OPENAI_RETRY_ATTEMPTS = 1; // Reduced retry attempts since we increased timeout per attempt
 
 const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
   let binary = '';
@@ -1569,12 +1569,13 @@ books.post('/analyze-image', jwtMiddleware, async (c) => {
       
       const requestTimeoutId = setTimeout(() => {
         const elapsed = Date.now() - requestStartTime;
-        logger.warn('AI Vision API timeout triggered', { 
+        logger.warn('AI Vision API timeout triggered - request taking longer than expected', { 
           elapsed, 
           timeoutMs, 
           image_url, 
           attempt: attempt + 1,
-          maxAttempts: OPENAI_RETRY_ATTEMPTS + 1
+          maxAttempts: OPENAI_RETRY_ATTEMPTS + 1,
+          message: `Request exceeded ${timeoutMs/1000}s timeout, falling back to basic description`
         });
         controller.abort();
       }, timeoutMs);
@@ -1591,26 +1592,26 @@ books.post('/analyze-image', jwtMiddleware, async (c) => {
             messages: [
                {
                  role: 'system',
-                 content: 'You are an educational assistant for children learning English. Provide a detailed, age-appropriate description for this book page.'
+                 content: 'You are an educational assistant for children learning English. Provide a comprehensive, detailed, and complete description for this book page. Include all visible text, characters, objects, actions, and educational content. Do not truncate your response.'
                },
                {
                  role: 'user',
                  content: [
                    {
                      type: 'text',
-                     text: 'Please describe this children\'s book page image clearly and engagingly. Focus on characters, actions, setting, and any educational details.'
+                     text: 'Please provide a complete and comprehensive description of this children\'s book page. Include ALL visible text, characters, actions, setting, educational details, and any other content you can see. Make sure to describe everything thoroughly without cutting off your response.'
                    },
                   {
                     type: 'image_url',
                     image_url: {
                       url: openaiImageSource,
-                      detail: inlineImageUrl ? undefined : 'low'
+                      detail: 'low' // Use low detail for faster processing
                     }
                   }
                 ]
               }
             ],
-            max_tokens: 512, // Allow for detailed descriptions
+            max_tokens: 1024, // Allow for detailed descriptions without truncation
             temperature: 0.2  // Lower temperature for more consistent, faster responses
           }),
           signal: controller.signal
@@ -1711,13 +1712,17 @@ books.post('/analyze-image', jwtMiddleware, async (c) => {
           error: lastError.message 
         });
 
-        // If this is the last attempt or a non-retryable error, break
-        if (attempt >= OPENAI_RETRY_ATTEMPTS || lastError.name !== 'AbortError') {
+        // Don't retry on timeout errors (AbortError) since we increased the timeout
+        // Only retry on network errors or other transient issues
+        if (attempt >= OPENAI_RETRY_ATTEMPTS || 
+            lastError.name === 'AbortError' || 
+            lastError.message.includes('timeout') ||
+            lastError.message.includes('aborted')) {
           break;
         }
 
-        // Wait before retrying (exponential backoff)
-        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+        // Wait before retrying (exponential backoff) - only for non-timeout errors
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 2000)); // Increased backoff
       }
     }
 
@@ -1854,7 +1859,7 @@ books.post('/extract-vocabulary', jwtMiddleware, async (c) => {
                   content: `Extract educational vocabulary from this description: "${description}". Focus on words that children can learn and use in their daily conversations.`
                 }
               ],
-              max_tokens: 500,
+              max_tokens: 800,
               temperature: 0.3
             }),
             signal: controller.signal
