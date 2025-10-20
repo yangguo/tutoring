@@ -36,6 +36,8 @@ Set secrets via `.dev.vars` (local) and Wrangler/Cloudflare dashboard (productio
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL` (defaults to `https://api.openai.com/v1` if omitted)
 - `OPENAI_MODEL` (e.g., `gpt-3.5-turbo`)
+- `OPENAI_VISION_MODEL` (defaults to `gpt-4o-mini` if omitted)
+- `OPENAI_VISION_TIMEOUT_MS` (integer milliseconds; defaults to `45000`)
 - `JWT_SECRET`
 
 Example `.dev.vars`:
@@ -46,6 +48,8 @@ SUPABASE_KEY=...
 OPENAI_API_KEY=...
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-3.5-turbo
+OPENAI_VISION_MODEL=gpt-4o-mini
+OPENAI_VISION_TIMEOUT_MS=45000
 JWT_SECRET=...
 ```
 

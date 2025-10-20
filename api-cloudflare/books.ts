@@ -47,7 +47,8 @@ const logger = {
 };
 
 const INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10MB limit for inline images
-const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 180_000; // 3 minutes, matches Express API default
+const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 45_000; // 45 seconds to allow for OpenAI API variability
+const OPENAI_RETRY_ATTEMPTS = 2; // Number of retry attempts for failed requests
 
 const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
   let binary = '';
@@ -1484,7 +1485,6 @@ const coerceOpenAIContent = (content: OpenAIContent | undefined): string => {
 
 // POST /analyze-image - Analyze image and extract description and vocabulary
 books.post('/analyze-image', jwtMiddleware, async (c) => {
-  let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
   const user = c.get('user');
   if (!user) {
@@ -1558,110 +1558,179 @@ books.post('/analyze-image', jwtMiddleware, async (c) => {
       ? parsedTimeout
       : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
 
-    const controller = new AbortController();
-    const startTime = Date.now();
-    timeoutId = setTimeout(() => {
-      const elapsed = Date.now() - startTime;
-      logger.warn('AI Vision API timeout triggered', { elapsed, timeoutMs, image_url });
-      controller.abort();
-    }, timeoutMs);
+    const openaiVisionModel = c.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
+    const inlineImageUrl = await getInlineImageUrl(image_url);
+    const openaiImageSource = inlineImageUrl ?? image_url;
 
-    try {
-      const openaiVisionModel = c.env.OPENAI_VISION_MODEL || 'gpt-4-turbo';
-      const inlineImageUrl = await getInlineImageUrl(image_url);
-      const openaiImageSource = inlineImageUrl ?? image_url;
+    // Retry logic for OpenAI API calls
+    const makeOpenAIRequest = async (attempt: number): Promise<Response> => {
+      const controller = new AbortController();
+      const requestStartTime = Date.now();
+      
+      const requestTimeoutId = setTimeout(() => {
+        const elapsed = Date.now() - requestStartTime;
+        logger.warn('AI Vision API timeout triggered', { 
+          elapsed, 
+          timeoutMs, 
+          image_url, 
+          attempt: attempt + 1,
+          maxAttempts: OPENAI_RETRY_ATTEMPTS + 1
+        });
+        controller.abort();
+      }, timeoutMs);
 
-      const openaiResponse = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: openaiVisionModel,
-          messages: [
-            {
-              role: 'system',
-              content: 'You are an educational assistant for children learning English. Provide a detailed, age-appropriate description for this book page.'
-            },
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'text',
-                  text: 'Please describe this children\'s book page image clearly and engagingly. Focus on characters, actions, setting, and any educational details.'
-                },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: openaiImageSource,
-                    detail: inlineImageUrl ? undefined : 'auto'
+      try {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: openaiVisionModel,
+            messages: [
+               {
+                 role: 'system',
+                 content: 'You are an educational assistant for children learning English. Provide a detailed, age-appropriate description for this book page.'
+               },
+               {
+                 role: 'user',
+                 content: [
+                   {
+                     type: 'text',
+                     text: 'Please describe this children\'s book page image clearly and engagingly. Focus on characters, actions, setting, and any educational details.'
+                   },
+                  {
+                    type: 'image_url',
+                    image_url: {
+                      url: openaiImageSource,
+                      detail: inlineImageUrl ? undefined : 'low'
+                    }
                   }
-                }
-              ]
-            }
-          ],
-          max_tokens: 512,
-          temperature: 0.3
-        }),
-        signal: controller.signal
-      });
+                ]
+              }
+            ],
+            max_tokens: 512, // Allow for detailed descriptions
+            temperature: 0.2  // Lower temperature for more consistent, faster responses
+          }),
+          signal: controller.signal
+        });
 
-      const elapsed = Date.now() - startTime;
-      logger.info('OpenAI Vision API request completed', { elapsed, image_url });
+        clearTimeout(requestTimeoutId);
+        return response;
+      } catch (error) {
+        clearTimeout(requestTimeoutId);
+        throw error;
+      }
+    };
 
-      if (!openaiResponse.ok) {
-        logger.error('OpenAI Vision API returned non-200 response', await openaiResponse.text());
-        ensureFallback('OpenAI Vision API returned a non-200 response.');
-      } else {
-        const openaiResult = await openaiResponse.json() as OpenAIResponse;
-        const rawContent = openaiResult.choices?.[0]?.message?.content;
+    let lastError: Error | null = null;
+    const startTime = Date.now();
 
-        const extractContentString = (content: unknown): string | null => {
-          if (!content) return null;
-          if (typeof content === 'string') return content;
-          if (Array.isArray(content)) {
-            return content
-              .map(part => {
-                if (typeof part === 'string') return part;
-                if (typeof part === 'object' && part && 'text' in part) {
-                  return String((part as { text?: string }).text ?? '');
-                }
-                return '';
-              })
-              .join('\n')
-              .trim() || null;
+    // Try the request with retries
+    for (let attempt = 0; attempt <= OPENAI_RETRY_ATTEMPTS; attempt++) {
+      try {
+        const openaiResponse = await makeOpenAIRequest(attempt);
+
+        const elapsed = Date.now() - startTime;
+        logger.info('OpenAI Vision API request completed', { 
+          elapsed, 
+          image_url, 
+          attempt: attempt + 1,
+          success: true 
+        });
+
+        if (!openaiResponse.ok) {
+          const errorText = await openaiResponse.text();
+          logger.warn('OpenAI Vision API returned non-200 response', { 
+            status: openaiResponse.status,
+            statusText: openaiResponse.statusText,
+            error: errorText,
+            attempt: attempt + 1
+          });
+          
+          // If it's a rate limit (429) or server error (5xx), retry
+          if ((openaiResponse.status === 429 || openaiResponse.status >= 500) && attempt < OPENAI_RETRY_ATTEMPTS) {
+            lastError = new Error(`OpenAI API error ${openaiResponse.status}: ${errorText}`);
+            await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000)); // Exponential backoff
+            continue;
           }
-          return null;
-        };
-
-        const cleanedContent = extractContentString(rawContent)
-          ?.replace(/```json|```/g, '')
-          .trim();
-
-        if (!cleanedContent) {
-          ensureFallback('OpenAI Vision response missing content.');
+          
+          ensureFallback(`OpenAI Vision API returned ${openaiResponse.status} response.`);
+          break;
         } else {
-          analysisResult = {
-            description: cleanedContent,
-            vocabulary: []
+          const openaiResult = await openaiResponse.json() as OpenAIResponse;
+          const rawContent = openaiResult.choices?.[0]?.message?.content;
+
+          const extractContentString = (content: unknown): string | null => {
+            if (!content) return null;
+            if (typeof content === 'string') return content;
+            if (Array.isArray(content)) {
+              return content
+                .map(part => {
+                  if (typeof part === 'string') return part;
+                  if (typeof part === 'object' && part && 'text' in part) {
+                    return String((part as { text?: string }).text ?? '');
+                  }
+                  return '';
+                })
+                .join('\n')
+                .trim() || null;
+            }
+            return null;
           };
+
+          const cleanedContent = extractContentString(rawContent)
+            ?.replace(/```json|```/g, '')
+            .trim();
+
+          if (!cleanedContent) {
+            if (attempt < OPENAI_RETRY_ATTEMPTS) {
+              lastError = new Error('OpenAI Vision response missing content');
+              await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+              continue;
+            }
+            ensureFallback('OpenAI Vision response missing content.');
+          } else {
+            analysisResult = {
+              description: cleanedContent,
+              vocabulary: []
+            };
+            break; // Success, exit retry loop
+          }
         }
+      } catch (error) {
+        const elapsed = Date.now() - startTime;
+        lastError = error instanceof Error ? error : new Error(String(error));
+        
+        logger.warn('OpenAI Vision API request failed', { 
+          elapsed, 
+          image_url, 
+          attempt: attempt + 1,
+          maxAttempts: OPENAI_RETRY_ATTEMPTS + 1,
+          error: lastError.message 
+        });
+
+        // If this is the last attempt or a non-retryable error, break
+        if (attempt >= OPENAI_RETRY_ATTEMPTS || lastError.name !== 'AbortError') {
+          break;
+        }
+
+        // Wait before retrying (exponential backoff)
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
       }
-    } catch (fetchError) {
-      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
-        logger.error('OpenAI Vision API request aborted due to timeout', fetchError, { timeoutMs });
-        ensureFallback('OpenAI Vision API request timed out.', fetchError);
-      } else {
-        logger.error('OpenAI Vision API request failed', fetchError);
-        ensureFallback('OpenAI Vision API request failed.', fetchError);
-      }
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      timeoutId = null;
     }
+
+    // If we exhausted all retries, use fallback
+    if (!analysisResult && lastError) {
+      logger.error('OpenAI Vision API request failed after all retries', {
+        error: lastError.message,
+        attempts: OPENAI_RETRY_ATTEMPTS + 1,
+        image_url
+      });
+      ensureFallback(`OpenAI Vision API request failed: ${lastError.message}`);
+    }
+
   }
 
   if (!analysisResult) {
