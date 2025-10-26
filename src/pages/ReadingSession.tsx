@@ -70,6 +70,7 @@ const ReadingSession: React.FC = () => {
   const [glossaryError, setGlossaryError] = useState<string | null>(null);
   const [showGlossaryOverlay, setShowGlossaryOverlay] = useState(true);
   const [activeGlossaryEntryId, setActiveGlossaryEntryId] = useState<string | null>(null);
+  const [pagesWithGlossary, setPagesWithGlossary] = useState<Set<string>>(new Set());
   const imageWrapperRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [imageRenderBox, setImageRenderBox] = useState<{ width: number; height: number; offsetX: number; offsetY: number }>({
@@ -119,6 +120,52 @@ const ReadingSession: React.FC = () => {
     }
   }, [bookId]);
 
+  // Fetch glossary status for all pages on initial load
+  useEffect(() => {
+    const fetchAllGlossaryStatus = async () => {
+      if (!pages || pages.length === 0) return;
+
+      try {
+        // Batch fetch to avoid overwhelming the server
+        // Process 5 pages at a time to prevent rate limiting
+        const batchSize = 5;
+        const pagesWithGlossaries = new Set<string>();
+
+        for (let i = 0; i < pages.length; i += batchSize) {
+          const batch = pages.slice(i, i + batchSize);
+          
+          const batchResults = await Promise.allSettled(
+            batch.map(page =>
+              api.getPageGlossary(page.id)
+                .then(response => ({
+                  pageId: page.id,
+                  hasGlossary: response.entries && response.entries.length > 0
+                }))
+            )
+          );
+
+          batchResults.forEach(result => {
+            if (result.status === 'fulfilled' && result.value.hasGlossary) {
+              pagesWithGlossaries.add(result.value.pageId);
+            }
+          });
+
+          // Update state after each batch for progressive loading
+          setPagesWithGlossary(new Set(pagesWithGlossaries));
+          
+          // Small delay between batches to avoid rate limiting
+          if (i + batchSize < pages.length) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch glossary status for pages:', error);
+      }
+    };
+
+    fetchAllGlossaryStatus();
+  }, [pages]);
+
   useEffect(() => {
     let isCancelled = false;
 
@@ -137,6 +184,10 @@ const ReadingSession: React.FC = () => {
         const response = await api.getPageGlossary(currentPage.id);
         if (!isCancelled) {
           setGlossaryEntries(response.entries || []);
+          // Track pages with glossary
+          if (response.entries && response.entries.length > 0) {
+            setPagesWithGlossary(prev => new Set([...prev, currentPage.id]));
+          }
         }
       } catch (error) {
         console.error('Failed to load glossary entries:', error);
@@ -610,6 +661,10 @@ const ReadingSession: React.FC = () => {
       const response = await api.analyzePageGlossary(currentPage.id, { refresh: true });
       setGlossaryEntries(response.entries || []);
       setActiveGlossaryEntryId(null);
+      // Track pages with glossary
+      if (response.entries && response.entries.length > 0) {
+        setPagesWithGlossary(prev => new Set([...prev, currentPage.id]));
+      }
       if (response.used_fallback) {
         toast.warning('Generated glossary using fallback text extraction.');
       } else {
@@ -1701,22 +1756,63 @@ const ReadingSession: React.FC = () => {
             {/* Page Navigation */}
             <div className="bg-white rounded-xl shadow-lg p-6">
               <h3 className="text-lg font-semibold text-gray-800 mb-4">Pages</h3>
+              <div className="mb-3 text-xs text-gray-600 space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded bg-purple-500"></div>
+                  <span>Has description & glossary</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded bg-blue-500"></div>
+                  <span>Has description only</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded bg-amber-500"></div>
+                  <span>Has glossary only</span>
+                </div>
+              </div>
               <div className="grid grid-cols-4 gap-2">
-                {pages.map((page, index) => (
-                  <button
-                    key={page.id}
-                    onClick={() => setCurrentPageIndex(index)}
-                    className={`aspect-square rounded-lg border-2 text-sm font-medium transition-colors ${
-                      index === currentPageIndex
-                        ? 'border-blue-500 bg-blue-50 text-blue-600'
-                        : readPages.has(page.page_number)
-                        ? 'border-green-500 bg-green-50 text-green-600'
-                        : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
-                    }`}
-                  >
-                    {page.page_number}
-                  </button>
-                ))}
+                {pages.map((page, index) => {
+                  const hasDescription = !!(page.image_description || imageDescriptions[page.id]);
+                  const hasGlossary = pagesWithGlossary.has(page.id);
+                  const isCurrent = index === currentPageIndex;
+                  const isRead = readPages.has(page.page_number);
+                  
+                  // Determine button color based on what's available
+                  let colorClasses = '';
+                  if (isCurrent) {
+                    // Current page - always blue border with varying background
+                    if (hasDescription && hasGlossary) {
+                      colorClasses = 'border-blue-500 bg-purple-100 text-purple-700';
+                    } else if (hasDescription) {
+                      colorClasses = 'border-blue-500 bg-blue-50 text-blue-600';
+                    } else if (hasGlossary) {
+                      colorClasses = 'border-blue-500 bg-amber-100 text-amber-700';
+                    } else {
+                      colorClasses = 'border-blue-500 bg-blue-50 text-blue-600';
+                    }
+                  } else if (hasDescription && hasGlossary) {
+                    colorClasses = 'border-purple-400 bg-purple-50 text-purple-600 hover:border-purple-500';
+                  } else if (hasDescription) {
+                    colorClasses = 'border-blue-400 bg-blue-50 text-blue-600 hover:border-blue-500';
+                  } else if (hasGlossary) {
+                    colorClasses = 'border-amber-400 bg-amber-50 text-amber-600 hover:border-amber-500';
+                  } else if (isRead) {
+                    colorClasses = 'border-gray-300 bg-gray-50 text-gray-600 hover:border-gray-400';
+                  } else {
+                    colorClasses = 'border-gray-200 bg-white text-gray-500 hover:border-gray-300';
+                  }
+                  
+                  return (
+                    <button
+                      key={page.id}
+                      onClick={() => setCurrentPageIndex(index)}
+                      className={`aspect-square rounded-lg border-2 text-sm font-medium transition-colors ${colorClasses}`}
+                      title={`Page ${page.page_number}${hasDescription ? ' • Has description' : ''}${hasGlossary ? ' • Has glossary' : ''}`}
+                    >
+                      {page.page_number}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           </div>
