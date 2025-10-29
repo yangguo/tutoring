@@ -71,6 +71,7 @@ const ReadingSession: React.FC = () => {
   const [showGlossaryOverlay, setShowGlossaryOverlay] = useState(true);
   const [activeGlossaryEntryId, setActiveGlossaryEntryId] = useState<string | null>(null);
   const [pagesWithGlossary, setPagesWithGlossary] = useState<Set<string>>(new Set());
+  const fetchedGlossaryPageIdsRef = useRef<string[]>([]);
   const imageWrapperRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const [imageRenderBox, setImageRenderBox] = useState<{ width: number; height: number; offsetX: number; offsetY: number }>({
@@ -120,10 +121,26 @@ const ReadingSession: React.FC = () => {
     }
   }, [bookId]);
 
-  // Fetch glossary status for all pages on initial load
+  // Fetch glossary status for pages when the page set changes (not for minor updates)
   useEffect(() => {
     const fetchAllGlossaryStatus = async () => {
-      if (!pages || pages.length === 0) return;
+      if (!pages || pages.length === 0) {
+        fetchedGlossaryPageIdsRef.current = [];
+        setPagesWithGlossary(new Set());
+        return;
+      }
+
+      const currentIds = pages.map(page => page.id);
+      const previousIds = fetchedGlossaryPageIdsRef.current;
+      const idsUnchanged =
+        previousIds.length === currentIds.length &&
+        previousIds.every((id, index) => id === currentIds[index]);
+
+      if (idsUnchanged) {
+        return;
+      }
+
+      fetchedGlossaryPageIdsRef.current = currentIds;
 
       try {
         // Batch fetch to avoid overwhelming the server

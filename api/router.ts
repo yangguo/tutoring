@@ -17,6 +17,67 @@ const router = Router();
 const INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10MB safety limit for inline images
 const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 180_000; // 3 minutes for potentially slower APIs
 
+const GLOSSARY_RESPONSE_FORMAT = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'glossary_response',
+    strict: true,
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        entries: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              word: { type: 'string' },
+              definition: { type: 'string' },
+              translation: { type: 'string' },
+              pronunciation: { type: ['string', 'null'] },
+              example_sentence: { type: ['string', 'null'] },
+              bounding_box: {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  top: { type: 'number' },
+                  left: { type: 'number' },
+                  width: { type: 'number' },
+                  height: { type: 'number' }
+                },
+                required: ['top', 'left', 'width', 'height']
+              },
+              notes: { type: 'string' },
+              metadata: {
+                type: 'object',
+                additionalProperties: true
+              },
+              duplicate_meanings: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    definition: { type: 'string' },
+                    translation: { type: 'string' },
+                    pronunciation: { type: ['string', 'null'] },
+                    example_sentence: { type: ['string', 'null'] },
+                    notes: { type: 'string' }
+                  },
+                  required: ['definition', 'translation']
+                }
+              }
+            },
+            required: ['word', 'definition', 'translation']
+          }
+        }
+      },
+      required: ['entries']
+    }
+  }
+} as const;
+
 async function getInlineImageUrl(imageUrl: string): Promise<string | null> {
   try {
     const response = await fetch(imageUrl);
@@ -55,6 +116,16 @@ function hasValidOpenAIConfig(): boolean {
     process.env.OPENAI_API_KEY !== 'your-openai-api-key-here' &&
     (process.env.OPENAI_API_KEY?.length ?? 0) >= 10
   );
+}
+
+function shouldUseGlossaryJsonSchema(modelName: string | null | undefined): boolean {
+  if (!modelName) return true;
+  const normalized = modelName.trim().toLowerCase();
+  if (!normalized) return true;
+  if (normalized.startsWith('gpt-4o')) return true;
+  if (normalized.startsWith('o1')) return true;
+  if (normalized.startsWith('gpt-4.1')) return true;
+  return false;
 }
 
 function clamp01(value: unknown, fallback = 0): number {
@@ -1974,6 +2045,7 @@ router.post(
 
         const promptInstruction = `You are assisting a parent who supports an English learner at the primary school level. ` +
           `Analyze the provided book page image and identify up to ${max_entries} English words or short phrases that a primary school student might find challenging. ` +
+          `Provide the "translation" value for every entry in Simplified Chinese. ` +
           `Respond with a single JSON object matching this schema: { "entries": [ { "word": string, ` +
           `"definition": string, "translation": string, "pronunciation": string, "example_sentence": string, "bounding_box": { "top": number, "left": number, "width": number, "height": number }, ` +
           `"notes"?: string, "duplicate_meanings"?: [ { "definition": string, "translation": string, "pronunciation"?: string, "example_sentence"?: string, "notes"?: string } ] } ] }. ` +
@@ -2013,21 +2085,28 @@ router.post(
         }, timeoutMs);
 
         try {
-          const response = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+          const requestPayload: Record<string, unknown> = {
+            model: visionModel,
+            messages,
+            max_tokens: 1500, // Increased from 700 to allow for complete glossary responses
+            temperature: 0.2
+          };
+
+          if (shouldUseGlossaryJsonSchema(visionModel)) {
+            requestPayload.response_format = GLOSSARY_RESPONSE_FORMAT;
+            metadata.response_format = 'json_schema';
+          } else {
+            requestPayload.response_format = { type: 'json_object' };
+            metadata.response_format = 'json_object';
+          }
+
+          let response = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
               'Content-Type': 'application/json'
             },
-            body: JSON.stringify({
-              model: visionModel,
-              messages,
-              max_tokens: 1500, // Increased from 700 to allow for complete glossary responses
-              temperature: 0.2,
-              response_format: {
-                type: 'json_object'
-              }
-            }),
+            body: JSON.stringify(requestPayload),
             signal: controller.signal
           });
 
@@ -2037,41 +2116,153 @@ router.post(
           metadata.api_duration_ms = elapsed;
           metadata.openai_status = response.status;
 
+          const responseFormatRequested = !!requestPayload.response_format;
+          const isResponseFormatError = (errorText: string): boolean => {
+            try {
+              const parsed = JSON.parse(errorText);
+              const message: unknown = parsed?.error?.message ?? parsed?.message;
+              if (typeof message === 'string' && message.toLowerCase().includes('response_format')) {
+                return true;
+              }
+            } catch {
+              // fall through to string matching
+            }
+            return errorText.toLowerCase().includes('response_format');
+          };
+
+          let finalResponse: typeof response | null = response;
+
           if (!response.ok) {
-            console.error('OpenAI glossary analysis error:', await response.text());
-            metadata.api_error = true;
-          } else {
-            const result = await response.json();
+            const errorText = await response.text();
+            const shouldRetryWithoutFormat =
+              responseFormatRequested &&
+              response.status === 400 &&
+              isResponseFormatError(errorText);
+
+            if (shouldRetryWithoutFormat) {
+              metadata.response_format_retry = 'removed_due_to_model';
+              delete requestPayload.response_format;
+              metadata.response_format = 'text';
+
+              const retryController = new AbortController();
+              const retryTimeoutId = setTimeout(() => retryController.abort(), timeoutMs);
+              const retryStart = Date.now();
+
+              try {
+                finalResponse = await fetch(`${process.env.OPENAI_BASE_URL}/chat/completions`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify(requestPayload),
+                  signal: retryController.signal
+                });
+                clearTimeout(retryTimeoutId);
+
+                const retryElapsed = Date.now() - retryStart;
+                metadata.retry_api_duration_ms = retryElapsed;
+                metadata.retry_openai_status = finalResponse.status;
+                metadata.openai_status = finalResponse.status;
+
+                if (!finalResponse.ok) {
+                  const retryErrorText = await finalResponse.text();
+                  console.error('OpenAI glossary analysis error after retry:', retryErrorText);
+                  metadata.api_error = true;
+                }
+              } catch (retryError) {
+                clearTimeout(retryTimeoutId);
+                console.error('OpenAI glossary analysis retry failed:', retryError);
+                metadata.request_error = retryError instanceof Error ? retryError.message : String(retryError);
+                metadata.api_error = true;
+                finalResponse = null;
+              }
+            } else {
+              console.error('OpenAI glossary analysis error:', errorText);
+              metadata.api_error = true;
+              finalResponse = null;
+            }
+          }
+
+          if (finalResponse && finalResponse.ok) {
+            const result = await finalResponse.json();
             const message = result.choices?.[0]?.message ?? null;
             let structuredPayload: unknown = null;
+            let rawContent: string | null = null;
 
-            if (message && message.content) {
-              console.log('Raw AI response content length:', message.content.length);
-              console.log('Raw AI response content preview:', message.content.substring(0, 200));
-              
-              // Check if the response seems complete (should end with proper JSON structure)
-              const content = message.content.trim();
-              if (!content.endsWith('}') && !content.endsWith(']}')) {
+            if (message) {
+              const { content } = message as { content?: unknown };
+
+              if (Array.isArray(content)) {
+                const jsonPart = content.find(
+                  (part: any) =>
+                    part &&
+                    typeof part === 'object' &&
+                    (part.type === 'output_json' || part.type === 'json' || part.type === 'json_object')
+                );
+
+                const jsonData =
+                  jsonPart && typeof (jsonPart as any).output_json === 'object'
+                    ? (jsonPart as any).output_json
+                    : jsonPart && typeof (jsonPart as any).json === 'object'
+                      ? (jsonPart as any).json
+                      : null;
+
+                if (jsonData) {
+                  structuredPayload = jsonData;
+                  metadata.output_format = 'structured';
+                }
+
+                const textParts = content
+                  .filter(
+                    (part: any) =>
+                      part &&
+                      typeof part === 'object' &&
+                      part.type === 'text' &&
+                      typeof part.text === 'string'
+                  )
+                  .map((part: any) => part.text as string)
+                  .join('\n')
+                  .trim();
+
+                if (textParts) {
+                  rawContent = textParts;
+                }
+              } else if (typeof content === 'string') {
+                rawContent = content;
+              }
+            }
+
+            if (structuredPayload) {
+              console.log('Received structured JSON content from OpenAI response.');
+            } else if (rawContent) {
+              if (!metadata.output_format) {
+                metadata.output_format = 'text';
+              }
+              console.log('Raw AI response content length:', rawContent.length);
+              console.log('Raw AI response content preview:', rawContent.substring(0, 200));
+
+              const trimmed = rawContent.trim();
+              if (!trimmed.endsWith('}') && !trimmed.endsWith(']}')) {
                 console.log('Response appears to be incomplete - missing closing braces');
-                console.log('Response ends with:', content.slice(-50)); // Show last 50 chars
+                console.log('Response ends with:', trimmed.slice(-50)); // Show last 50 chars
                 metadata.incomplete_response = true;
               }
-              
+
               try {
-                structuredPayload = JSON.parse(message.content);
+                structuredPayload = JSON.parse(rawContent);
               } catch (parseError) {
                 console.error('Unable to parse glossary AI response:', parseError);
-                console.log('Failed content:', message.content);
+                console.log('Failed content:', rawContent);
                 metadata.json_parse_error = true;
-                
-                // Attempt to clean up the string if parsing fails
-                const cleanedContent = message.content.replace(/```json|```/g, '').trim();
+
+                const cleanedContent = rawContent.replace(/```json|```/g, '').trim();
                 console.log('Cleaned content preview:', cleanedContent.substring(0, 200));
-                
-              try {
+
+                try {
                   structuredPayload = JSON.parse(cleanedContent);
                   console.log('Successfully parsed cleaned content');
-              } catch (finalParseError) {
+                } catch (finalParseError) {
                   console.error('Unable to parse cleaned glossary AI response:', finalParseError);
                   console.log('Final failed content:', cleanedContent);
                   metadata.final_parse_error = true;
@@ -2088,11 +2279,14 @@ router.post(
                   }
                 }
               }
-          } else {
-            console.log('No message content received from AI response');
-            console.log('Full result:', JSON.stringify(result, null, 2));
-            metadata.no_content = true;
-          }
+            } else {
+              console.log('No message content received from AI response');
+              console.log('Full result:', JSON.stringify(result, null, 2));
+              if (!metadata.output_format) {
+                metadata.output_format = 'none';
+              }
+              metadata.no_content = true;
+            }
 
             const maybeEntries = structuredPayload && Array.isArray((structuredPayload as any).entries)
               ? (structuredPayload as any).entries

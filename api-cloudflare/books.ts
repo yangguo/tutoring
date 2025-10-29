@@ -724,6 +724,7 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
 
       const promptInstruction = `You are assisting a parent who supports an English learner at the primary school level. ` +
         `Analyze the provided book page image and identify up to ${maxEntries} English words or short phrases that a primary school student might find challenging. ` +
+        `Provide the "translation" value for every entry in Simplified Chinese. ` +
         `Respond with a single JSON object matching this schema: { "entries": [ { "word": string, "definition": string, ` +
         `"translation": string, "pronunciation": string, "example_sentence": string, "bounding_box": { "top": number, "left": number, "width": number, "height": number }, ` +
         `"notes"?: string, "duplicate_meanings"?: [ { "definition": string, "translation": string, "pronunciation"?: string, "example_sentence"?: string, "notes"?: string } ] } ] }. ` +
@@ -766,34 +767,115 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
           metadata.timeout_occurred = true;
         }, cappedTimeoutMs);
 
-        const response = await fetch(`${baseUrl}/chat/completions`, {
+        const requestPayload: Record<string, unknown> = {
+          model: visionModel,
+          messages,
+          max_tokens: 1500,
+          temperature: 0.2,
+          response_format: {
+            type: 'json_object'
+          }
+        };
+        metadata.response_format = 'json_object';
+
+        let response = await fetch(`${baseUrl}/chat/completions`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            model: visionModel,
-            messages,
-            max_tokens: 1500,
-            temperature: 0.2,
-            response_format: {
-              type: 'json_object'
-            }
-          }),
+          body: JSON.stringify(requestPayload),
           signal: controller.signal
         });
+
+        if (timeoutId) {
+          clearTimeout(timeoutId);
+          timeoutId = null;
+        }
 
         const elapsed = Date.now() - startTime;
         metadata.api_duration_ms = elapsed;
         metadata.openai_status = response.status;
 
+        const responseFormatRequested = !!requestPayload.response_format;
+        const isResponseFormatError = (errorText: string): boolean => {
+          try {
+            const parsed = JSON.parse(errorText);
+            const message: unknown = parsed?.error?.message ?? parsed?.message;
+            if (typeof message === 'string' && message.toLowerCase().includes('response_format')) {
+              return true;
+            }
+          } catch {
+            // fall through to simple string matching
+          }
+          return errorText.toLowerCase().includes('response_format');
+        };
+
+        let finalResponse = response;
+
         if (!response.ok) {
           const errorText = await response.text();
-          metadata.api_error = true;
-          logger.error('OpenAI glossary analysis error', errorText, { pageId, status: response.status });
-        } else {
-          const result = await response.json() as OpenAIResponse;
+          const shouldRetryWithoutFormat =
+            responseFormatRequested &&
+            response.status === 400 &&
+            isResponseFormatError(errorText);
+
+          if (shouldRetryWithoutFormat) {
+            metadata.response_format_retry = 'removed_due_to_model';
+            delete requestPayload.response_format;
+            metadata.response_format = 'text';
+
+            const retryController = new AbortController();
+            let retryTimeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+              retryController.abort();
+              metadata.timeout_occurred = true;
+            }, cappedTimeoutMs);
+
+            const retryStart = Date.now();
+
+            try {
+              finalResponse = await fetch(`${baseUrl}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${c.env.OPENAI_API_KEY}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestPayload),
+                signal: retryController.signal
+              });
+              if (retryTimeoutId) {
+                clearTimeout(retryTimeoutId);
+                retryTimeoutId = null;
+              }
+
+              const retryElapsed = Date.now() - retryStart;
+              metadata.retry_api_duration_ms = retryElapsed;
+              metadata.retry_openai_status = finalResponse.status;
+              metadata.openai_status = finalResponse.status;
+
+              if (!finalResponse.ok) {
+                const retryErrorText = await finalResponse.text();
+                metadata.api_error = true;
+                logger.error('OpenAI glossary analysis error after retry', retryErrorText, { pageId, status: finalResponse.status });
+              }
+            } catch (retryError) {
+              if (retryTimeoutId) {
+                clearTimeout(retryTimeoutId);
+              }
+              metadata.api_error = true;
+              metadata.request_error = retryError instanceof Error ? retryError.message : String(retryError);
+              logger.error('OpenAI glossary analysis retry failed', retryError, { pageId });
+              finalResponse = null;
+            }
+          } else {
+            metadata.api_error = true;
+            logger.error('OpenAI glossary analysis error', errorText, { pageId, status: response.status });
+            finalResponse = null;
+          }
+        }
+
+        if (finalResponse && finalResponse.ok) {
+          const result = await finalResponse.json() as OpenAIResponse;
           const message = result.choices?.[0]?.message ?? null;
           let structuredPayload: unknown = null;
 
