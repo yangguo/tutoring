@@ -26,6 +26,101 @@ import { convertPdfFileToImages, getPdfPageCount, extractPdfTextPerPage } from '
 import { useAuthStore } from '../stores/authStore';
 import { cleanTextForTTS } from '../lib/utils';
 
+interface GlossaryVocabularyWord {
+  id: string;
+  word: string;
+  definition: string;
+  translation: string | null;
+  pronunciation: string | null;
+  exampleSentence: string | null;
+  notes: string | null;
+  sourceEntry: PageGlossaryEntry;
+}
+
+const toNullableTrimmedString = (value: unknown): string | null => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+};
+
+const resolveDuplicateMeanings = (entry: PageGlossaryEntry, metadata: Record<string, any>): GlossaryDuplicateMeaning[] => {
+  if (Array.isArray(entry.duplicate_meanings)) {
+    return entry.duplicate_meanings;
+  }
+  if (Array.isArray(metadata.duplicate_meanings)) {
+    return metadata.duplicate_meanings as GlossaryDuplicateMeaning[];
+  }
+  return [];
+};
+
+const resolveGlossaryEntryDetails = (entry: PageGlossaryEntry) => {
+  const metadata = (entry.metadata ?? {}) as Record<string, any>;
+  const duplicateMeanings = resolveDuplicateMeanings(entry, metadata);
+  const pronunciation =
+    toNullableTrimmedString(entry.pronunciation) ??
+    toNullableTrimmedString(metadata.pronunciation) ??
+    toNullableTrimmedString(duplicateMeanings.find(meaning => meaning.pronunciation)?.pronunciation);
+
+  const exampleSentence =
+    toNullableTrimmedString(entry.example_sentence) ??
+    toNullableTrimmedString(metadata.example_sentence) ??
+    toNullableTrimmedString(duplicateMeanings.find(meaning => meaning.example_sentence)?.example_sentence);
+
+  const notes =
+    toNullableTrimmedString(entry.notes) ??
+    toNullableTrimmedString(metadata.notes);
+
+  return {
+    metadata,
+    duplicateMeanings,
+    pronunciation,
+    exampleSentence,
+    notes
+  };
+};
+
+const getVocabularyWordIdFromEntry = (entry: PageGlossaryEntry): string | null => {
+  const explicitId = toNullableTrimmedString((entry as any).vocabulary_word_id ?? entry.vocabulary_word_id);
+  if (explicitId) {
+    return explicitId;
+  }
+  const metadata = (entry.metadata ?? {}) as Record<string, any>;
+  return toNullableTrimmedString(metadata.vocabulary_word_id);
+};
+
+const createVocabularyWordFromEntry = (entry: PageGlossaryEntry): GlossaryVocabularyWord => {
+  const { duplicateMeanings, pronunciation, exampleSentence, notes } = resolveGlossaryEntryDetails(entry);
+  const fallbackMeaning = duplicateMeanings.find(meaning =>
+    typeof meaning.definition === 'string' && meaning.definition.trim().length > 0
+  );
+  const fallbackTranslation = duplicateMeanings.find(meaning =>
+    typeof meaning.translation === 'string' && meaning.translation.trim().length > 0
+  );
+
+  const definition =
+    toNullableTrimmedString(entry.definition) ??
+    toNullableTrimmedString(fallbackMeaning?.definition) ??
+    toNullableTrimmedString(entry.translation) ??
+    `Definition for "${entry.word}"`;
+
+  const translation =
+    toNullableTrimmedString(entry.translation) ??
+    toNullableTrimmedString(fallbackTranslation?.translation);
+
+  return {
+    id: entry.id,
+    word: entry.word,
+    definition,
+    translation,
+    pronunciation,
+    exampleSentence,
+    notes,
+    sourceEntry: entry
+  };
+};
+
 
 
 
@@ -44,7 +139,6 @@ const ReadingSession: React.FC = () => {
   const [sessionStartTime] = useState(Date.now());
   const [readPages, setReadPages] = useState<Set<number>>(new Set());
   const [showVocabulary, setShowVocabulary] = useState(false);
-  const [vocabularyWords, setVocabularyWords] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showImageDescription, setShowImageDescription] = useState(false);
   const [analyzingImage, setAnalyzingImage] = useState(false);
@@ -95,29 +189,57 @@ const ReadingSession: React.FC = () => {
       };
     }
 
-    const metadata = (activeGlossaryEntry.metadata ?? {}) as Record<string, any>;
-    const pronunciation =
-      activeGlossaryEntry.pronunciation ??
-      (typeof metadata.pronunciation === 'string' ? metadata.pronunciation : null);
-    const exampleSentence =
-      activeGlossaryEntry.example_sentence ??
-      (typeof metadata.example_sentence === 'string' ? metadata.example_sentence : null);
-    const notes =
-      activeGlossaryEntry.notes ??
-      (typeof metadata.notes === 'string' ? metadata.notes : null);
-    const duplicateMeanings = Array.isArray(activeGlossaryEntry.duplicate_meanings)
-      ? activeGlossaryEntry.duplicate_meanings
-      : Array.isArray(metadata.duplicate_meanings)
-        ? (metadata.duplicate_meanings as GlossaryDuplicateMeaning[])
-        : [];
-
+    const { pronunciation, exampleSentence, notes, duplicateMeanings } = resolveGlossaryEntryDetails(activeGlossaryEntry);
     return { pronunciation, exampleSentence, notes, duplicateMeanings };
   }, [activeGlossaryEntry]);
+
+  const vocabularyWords = useMemo<GlossaryVocabularyWord[]>(() => {
+    if (!glossaryEntries.length) {
+      return [];
+    }
+
+    const uniqueWords = new Map<string, GlossaryVocabularyWord>();
+
+    glossaryEntries.forEach(entry => {
+      const normalizedWord = typeof entry.word === 'string' ? entry.word.trim().toLowerCase() : '';
+      if (!normalizedWord) {
+        return;
+      }
+
+      const candidate = createVocabularyWordFromEntry(entry);
+      const existing = uniqueWords.get(normalizedWord);
+
+      if (!existing) {
+        uniqueWords.set(normalizedWord, candidate);
+        return;
+      }
+
+      const shouldReplaceDefinition =
+        existing.definition.startsWith('Definition for "') &&
+        candidate.definition &&
+        !candidate.definition.startsWith('Definition for "');
+
+      const existingWordId = getVocabularyWordIdFromEntry(existing.sourceEntry);
+      const candidateWordId = getVocabularyWordIdFromEntry(candidate.sourceEntry);
+
+      uniqueWords.set(normalizedWord, {
+        id: existing.id,
+        word: existing.word,
+        definition: shouldReplaceDefinition ? candidate.definition : existing.definition,
+        translation: existing.translation ?? candidate.translation,
+        pronunciation: existing.pronunciation ?? candidate.pronunciation,
+        exampleSentence: existing.exampleSentence ?? candidate.exampleSentence,
+        notes: existing.notes ?? candidate.notes,
+        sourceEntry: existingWordId ? existing.sourceEntry : candidateWordId ? candidate.sourceEntry : existing.sourceEntry
+      });
+    });
+
+    return Array.from(uniqueWords.values());
+  }, [glossaryEntries]);
 
   useEffect(() => {
     if (bookId) {
       fetchBookData();
-      fetchVocabulary();
     }
   }, [bookId]);
 
@@ -410,15 +532,6 @@ const ReadingSession: React.FC = () => {
     }
   };
 
-  const fetchVocabulary = async () => {
-    try {
-      const response = await api.getVocabulary();
-      setVocabularyWords(response.words || []);
-    } catch (error) {
-      console.error('Error fetching vocabulary:', error);
-    }
-  };
-
   const handlePlayPause = () => {
     if (audioRef.current) {
       if (isPlaying) {
@@ -462,7 +575,8 @@ const ReadingSession: React.FC = () => {
       v.word.toLowerCase() === word.toLowerCase()
     );
     if (vocabWord) {
-      toast.info(`${vocabWord.word}: ${vocabWord.definition}`);
+      const translationSuffix = vocabWord.translation ? ` (${vocabWord.translation})` : '';
+      toast.info(`${vocabWord.word}: ${vocabWord.definition}${translationSuffix}`);
     }
   };
 
@@ -483,12 +597,26 @@ const ReadingSession: React.FC = () => {
     }
   };
 
-  const addToVocabulary = async (wordId: string) => {
+  const addToVocabulary = async (word: GlossaryVocabularyWord) => {
     try {
-      await api.learnVocabularyWord(wordId);
-      toast.success('Word added to your vocabulary!');
+      const vocabularyWordId = getVocabularyWordIdFromEntry(word.sourceEntry);
+
+      if (vocabularyWordId) {
+        await api.learnVocabularyWord(vocabularyWordId);
+      } else {
+        await api.learnVocabulary({
+          word: word.word,
+          definition: word.definition,
+          pronunciation: word.pronunciation ?? undefined,
+          example_sentence: word.exampleSentence ?? undefined,
+          difficulty_level: book?.difficulty_level ?? 'beginner',
+          category: 'glossary'
+        });
+      }
+
+      toast.success(`Added "${word.word}" to your vocabulary!`);
     } catch (error) {
-      console.error('Error adding word:', error);
+      console.error('Error adding word to vocabulary from glossary:', error);
       toast.error('Failed to add word to vocabulary');
     }
   };
@@ -649,8 +777,6 @@ const ReadingSession: React.FC = () => {
             
             if (vocabularyResult.vocabulary.length > 0) {
               toast.success(`Found ${vocabularyResult.vocabulary.length} new vocabulary words!`);
-              // Refresh vocabulary list to show new words
-               fetchVocabulary();
             }
           } catch (vocabError) {
             console.error('Vocabulary extraction failed:', vocabError);
@@ -1749,23 +1875,39 @@ const ReadingSession: React.FC = () => {
               <div className="bg-white rounded-xl shadow-lg p-6">
                 <h3 className="text-lg font-semibold text-gray-800 mb-4">Vocabulary Words</h3>
                 <div className="space-y-3 max-h-64 overflow-y-auto">
-                  {vocabularyWords.slice(0, 5).map((word) => (
-                    <div key={word.id} className="border rounded-lg p-3">
-                      <div className="flex justify-between items-start mb-2">
-                        <h4 className="font-medium text-gray-800">{word.word}</h4>
-                        <button
-                          onClick={() => addToVocabulary(word.id)}
-                          className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600 transition-colors"
-                        >
-                          Learn
-                        </button>
+                  {vocabularyWords.length === 0 ? (
+                    <p className="text-sm text-gray-500">
+                      Generate a glossary for this page to see highlighted vocabulary words.
+                    </p>
+                  ) : (
+                    vocabularyWords.slice(0, 5).map((word) => (
+                      <div key={word.id} className="border rounded-lg p-3">
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <h4 className="font-medium text-gray-800">
+                              {word.word}
+                              {word.pronunciation && (
+                                <span className="ml-2 text-xs text-gray-500">{word.pronunciation}</span>
+                              )}
+                            </h4>
+                          </div>
+                          <button
+                            onClick={() => addToVocabulary(word)}
+                            className="text-xs bg-blue-500 text-white px-2 py-1 rounded hover:bg-blue-600 transition-colors"
+                          >
+                            Learn
+                          </button>
+                        </div>
+                        <p className="text-sm text-gray-600 mb-1">{word.definition}</p>
+                        {word.translation && (
+                          <p className="text-xs text-gray-500">Translation: {word.translation}</p>
+                        )}
+                        {word.exampleSentence && (
+                          <p className="text-xs text-gray-500 italic">"{word.exampleSentence}"</p>
+                        )}
                       </div>
-                      <p className="text-sm text-gray-600 mb-1">{word.definition}</p>
-                      {word.example_sentence && (
-                        <p className="text-xs text-gray-500 italic">"{word.example_sentence}"</p>
-                      )}
-                    </div>
-                  ))}
+                    ))
+                  )}
                 </div>
               </div>
             )}

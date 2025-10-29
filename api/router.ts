@@ -167,6 +167,7 @@ interface GlossaryAnalysisEntry {
   translation: string;
   pronunciation?: string | null;
   example_sentence?: string | null;
+  difficulty?: string | null;
   bounding_box?: GlossaryBoundingBox;
   notes?: string;
   position?: GlossaryPosition;
@@ -226,6 +227,7 @@ function generateFallbackGlossaryFromText(text: string | null | undefined, maxEn
     translation: `${word}（待翻译）`,
     pronunciation: null,
     example_sentence: null,
+    difficulty: 'challenging',
     position: createFallbackPosition(index, candidates.length),
     notes: 'Generated without AI vision OCR.',
     metadata: { source: 'fallback-text', note: 'Generated without AI vision OCR' }
@@ -353,6 +355,141 @@ const mergeDuplicateEntries = (entries: GlossaryAnalysisEntry[]): GlossaryAnalys
   return ordered;
 };
 
+type VocabularyDifficulty = 'beginner' | 'intermediate' | 'advanced';
+
+interface GlossaryVocabularySyncOptions {
+  defaultDifficulty: VocabularyDifficulty;
+  category?: string;
+}
+
+const VALID_VOCABULARY_DIFFICULTIES: Set<VocabularyDifficulty> = new Set([
+  'beginner',
+  'intermediate',
+  'advanced'
+]);
+
+const normalizeVocabularyWord = (word: string | null | undefined): string | null => {
+  if (typeof word !== 'string') return null;
+  const trimmed = word.trim().toLowerCase();
+  return trimmed.length ? trimmed : null;
+};
+
+const inferVocabularyDifficulty = (
+  entry: GlossaryAnalysisEntry,
+  fallback: VocabularyDifficulty
+): VocabularyDifficulty => {
+  const metadataDifficulty = isRecord(entry.metadata) && typeof entry.metadata.difficulty === 'string'
+    ? entry.metadata.difficulty
+    : null;
+
+  const rawValue = metadataDifficulty
+    ?? (typeof entry.difficulty === 'string' ? entry.difficulty : null);
+
+  if (typeof rawValue === 'string') {
+    const normalized = rawValue.trim().toLowerCase() as VocabularyDifficulty;
+    if (VALID_VOCABULARY_DIFFICULTIES.has(normalized)) {
+      return normalized;
+    }
+  }
+
+  return fallback;
+};
+
+const syncGlossaryVocabularyWords = async (
+  entries: GlossaryAnalysisEntry[],
+  options: GlossaryVocabularySyncOptions
+): Promise<Map<string, string>> => {
+  const wordIdMap = new Map<string, string>();
+  if (!entries.length) {
+    return wordIdMap;
+  }
+
+  const uniqueEntries = new Map<string, GlossaryAnalysisEntry>();
+  for (const entry of entries) {
+    const normalizedWord = normalizeVocabularyWord(entry.word);
+    if (!normalizedWord) continue;
+
+    if (!uniqueEntries.has(normalizedWord)) {
+      uniqueEntries.set(normalizedWord, entry);
+    }
+  }
+
+  if (!uniqueEntries.size) {
+    return wordIdMap;
+  }
+
+  const normalizedWords = Array.from(uniqueEntries.keys());
+
+  try {
+    const { data: existingWords, error: existingError } = await supabase
+      .from('vocabulary_words')
+      .select('id, word')
+      .in('word', normalizedWords);
+
+    if (existingError) {
+      console.error('Failed to fetch existing vocabulary words for glossary sync:', existingError);
+    } else if (Array.isArray(existingWords)) {
+      for (const existing of existingWords) {
+        if (existing?.word && existing?.id) {
+          wordIdMap.set(existing.word, existing.id);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Unexpected error fetching vocabulary words for glossary sync:', error);
+  }
+
+  const wordsToInsert = normalizedWords
+    .filter(word => !wordIdMap.has(word))
+    .map(word => {
+      const entry = uniqueEntries.get(word)!;
+      const definition = typeof entry.definition === 'string' && entry.definition.trim()
+        ? entry.definition.trim()
+        : typeof entry.translation === 'string' && entry.translation.trim()
+          ? entry.translation.trim()
+          : `Definition for "${entry.word}"`;
+      const pronunciation = typeof entry.pronunciation === 'string' && entry.pronunciation.trim()
+        ? entry.pronunciation.trim()
+        : null;
+      const exampleSentence = typeof entry.example_sentence === 'string' && entry.example_sentence.trim()
+        ? entry.example_sentence.trim()
+        : null;
+      const difficulty = inferVocabularyDifficulty(entry, options.defaultDifficulty);
+
+      return {
+        word,
+        definition,
+        pronunciation,
+        example_sentence: exampleSentence,
+        difficulty_level: difficulty,
+        category: options.category ?? 'glossary'
+      };
+    });
+
+  if (wordsToInsert.length > 0) {
+    try {
+      const { data: insertedWords, error: insertError } = await supabase
+        .from('vocabulary_words')
+        .insert(wordsToInsert)
+        .select('id, word');
+
+      if (insertError) {
+        console.error('Failed to insert glossary vocabulary words:', insertError);
+      } else if (Array.isArray(insertedWords)) {
+        for (const inserted of insertedWords) {
+          if (inserted?.word && inserted?.id) {
+            wordIdMap.set(inserted.word, inserted.id);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Unexpected error inserting glossary vocabulary words:', error);
+    }
+  }
+
+  return wordIdMap;
+};
+
 const composeEntryMetadata = (
   baseMetadata: Record<string, unknown>,
   entry: GlossaryAnalysisEntry,
@@ -436,11 +573,15 @@ const transformStoredGlossaryEntry = (entry: Record<string, any>) => {
     ? metadataRecord.notes
     : undefined;
   const duplicate_meanings = normalizeDuplicateMeanings(metadataRecord.duplicate_meanings);
+  const vocabulary_word_id = typeof metadataRecord.vocabulary_word_id === 'string'
+    ? metadataRecord.vocabulary_word_id
+    : null;
 
   const metadataForResponse: Record<string, unknown> = { ...metadataRecord };
   delete metadataForResponse.pronunciation;
   delete metadataForResponse.example_sentence;
   delete metadataForResponse.duplicate_meanings;
+  delete metadataForResponse.vocabulary_word_id;
 
   if (notes !== undefined) {
     metadataForResponse.notes = notes;
@@ -456,7 +597,8 @@ const transformStoredGlossaryEntry = (entry: Record<string, any>) => {
     example_sentence,
     duplicate_meanings,
     notes,
-    metadata: cleanedMetadata
+    metadata: cleanedMetadata,
+    vocabulary_word_id
   };
 };
 
@@ -1524,50 +1666,132 @@ router.get('/books/speaking-sessions', authenticateToken, async (req: Request, r
 router.post('/books/vocabulary/learn', authenticateToken, async (req: Request, res: Response): Promise<void> => {
   try {
     const { userId } = (req as any).user;
-    const { word_id } = req.body;
+    const {
+      word_id,
+      word: wordText,
+      definition,
+      pronunciation,
+      example_sentence,
+      difficulty_level,
+      category
+    } = req.body ?? {};
 
-    if (!word_id) {
-      res.status(400).json({ error: 'Word ID is required' });
+    let resolvedWordId =
+      typeof word_id === 'string' && word_id.trim().length > 0 ? word_id.trim() : null;
+
+    if (!resolvedWordId) {
+      const normalizedWord = normalizeVocabularyWord(wordText);
+      const definitionText = typeof definition === 'string' ? definition.trim() : '';
+
+      if (!normalizedWord || !definitionText) {
+        res.status(400).json({ error: 'Word ID or word details are required' });
+        return;
+      }
+
+      const { data: existingWord, error: existingWordError } = await supabase
+        .from('vocabulary_words')
+        .select('id')
+        .eq('word', normalizedWord)
+        .maybeSingle();
+
+      if (existingWordError) {
+        console.error('Failed to look up vocabulary word:', existingWordError);
+        res.status(500).json({ error: 'Failed to process vocabulary word' });
+        return;
+      }
+
+      if (existingWord?.id) {
+        resolvedWordId = existingWord.id;
+      } else {
+        const difficultyRaw = typeof difficulty_level === 'string'
+          ? difficulty_level.toLowerCase()
+          : 'beginner';
+        const resolvedDifficulty = VALID_VOCABULARY_DIFFICULTIES.has(difficultyRaw as VocabularyDifficulty)
+          ? (difficultyRaw as VocabularyDifficulty)
+          : 'beginner';
+
+        const pronunciationValue =
+          typeof pronunciation === 'string' && pronunciation.trim().length > 0
+            ? pronunciation.trim()
+            : null;
+        const exampleSentenceValue =
+          typeof example_sentence === 'string' && example_sentence.trim().length > 0
+            ? example_sentence.trim()
+            : null;
+        const categoryValue =
+          typeof category === 'string' && category.trim().length > 0
+            ? category.trim()
+            : 'custom';
+
+        const { data: newWord, error: insertWordError } = await supabase
+          .from('vocabulary_words')
+          .insert({
+            word: normalizedWord,
+            definition: definitionText,
+            pronunciation: pronunciationValue,
+            example_sentence: exampleSentenceValue,
+            difficulty_level: resolvedDifficulty,
+            category: categoryValue
+          })
+          .select('id')
+          .single();
+
+        if (insertWordError || !newWord) {
+          console.error('Failed to create vocabulary word from learn request:', insertWordError);
+          res.status(500).json({ error: 'Failed to create vocabulary word' });
+          return;
+        }
+
+        resolvedWordId = newWord.id;
+      }
+    }
+
+    if (!resolvedWordId) {
+      res.status(400).json({ error: 'Word ID could not be resolved' });
       return;
     }
 
-    // Check if word exists
-    const { data: word, error: wordError } = await supabase
+    const { data: wordRecord, error: wordError } = await supabase
       .from('vocabulary_words')
       .select('id')
-      .eq('id', word_id)
-      .single();
+      .eq('id', resolvedWordId)
+      .maybeSingle();
 
-    if (wordError || !word) {
+    if (wordError) {
+      console.error('Failed to verify vocabulary word:', wordError);
+      res.status(500).json({ error: 'Failed to verify vocabulary word' });
+      return;
+    }
+
+    if (!wordRecord) {
       res.status(404).json({ error: 'Vocabulary word not found' });
       return;
     }
 
-    // Check if already learned
     const { data: existing } = await supabase
       .from('user_vocabulary')
       .select('id')
       .eq('user_id', userId)
-      .eq('word_id', word_id)
-      .single();
+      .eq('word_id', resolvedWordId)
+      .maybeSingle();
 
     if (existing) {
       res.status(409).json({ error: 'Word already in user vocabulary' });
       return;
     }
 
-    // Add to user vocabulary
     const { data: userVocab, error: vocabError } = await supabase
       .from('user_vocabulary')
       .insert({
         user_id: userId,
-        word_id,
-        mastery_level: 1
+        word_id: resolvedWordId,
+        mastery_level: 'learning'
       })
       .select()
       .single();
 
-    if (vocabError) {
+    if (vocabError || !userVocab) {
+      console.error('Failed to add word to vocabulary:', vocabError);
       res.status(500).json({ error: 'Failed to add word to vocabulary' });
       return;
     }
@@ -2353,6 +2577,18 @@ router.post(
         return;
       }
 
+      const bookDifficultyRaw = typeof book.difficulty_level === 'string'
+        ? book.difficulty_level.toLowerCase()
+        : 'beginner';
+      const defaultVocabularyDifficulty = VALID_VOCABULARY_DIFFICULTIES.has(bookDifficultyRaw as VocabularyDifficulty)
+        ? (bookDifficultyRaw as VocabularyDifficulty)
+        : 'beginner';
+
+      const vocabularyWordIds = await syncGlossaryVocabularyWords(aiEntries, {
+        defaultDifficulty: defaultVocabularyDifficulty,
+        category: 'glossary'
+      });
+
       if (refresh) {
         const { error: deleteError } = await supabase
           .from('page_glossary_entries')
@@ -2391,13 +2627,18 @@ router.post(
         const source = sourceFromMetadata
           ?? (metadata.fallback_used === true || !openAiAvailable ? 'fallback-text' : 'openai-vision');
 
-        const metadataPayload = composeEntryMetadata(
-          {
-            ...metadata
-          },
-          entry,
-          source
-        );
+        const normalizedWord = normalizeVocabularyWord(entry.word);
+        const vocabularyWordId = normalizedWord ? vocabularyWordIds.get(normalizedWord) ?? null : null;
+
+        const metadataBase: Record<string, unknown> = {
+          ...metadata
+        };
+
+        if (vocabularyWordId) {
+          metadataBase.vocabulary_word_id = vocabularyWordId;
+        }
+
+        const metadataPayload = composeEntryMetadata(metadataBase, entry, source);
 
         return {
           page_id: pageId,

@@ -71,6 +71,7 @@ export interface PageGlossaryEntry {
   notes?: string | null;
   position: GlossaryPosition;
   metadata?: Record<string, any> | null;
+  vocabulary_word_id?: string | null;
   created_by?: string | null;
   created_at: string;
 }
