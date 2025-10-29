@@ -16,6 +16,7 @@ const router = Router();
 
 const INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10MB safety limit for inline images
 const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 180_000; // 3 minutes for potentially slower APIs
+const DEFAULT_OPENAI_VISION_MAX_TOKENS = 2_024; // Allow longer descriptions from vision responses
 
 const GLOSSARY_RESPONSE_FORMAT = {
   type: 'json_schema',
@@ -1803,6 +1804,11 @@ router.post('/books/analyze-image', authenticateToken, async (req: Request, res:
         const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0
           ? parsedTimeout
           : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
+        const visionMaxTokensRaw = process.env.OPENAI_VISION_MAX_TOKENS;
+        const parsedMaxTokens = visionMaxTokensRaw ? Number.parseInt(visionMaxTokensRaw, 10) : Number.NaN;
+        const maxTokens = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0
+          ? parsedMaxTokens
+          : DEFAULT_OPENAI_VISION_MAX_TOKENS;
 
         const openaiVisionModel = process.env.OPENAI_VISION_MODEL || 'gpt-4-turbo';
         const inlineImageUrl = await getInlineImageUrl(image_url);
@@ -1827,14 +1833,14 @@ router.post('/books/analyze-image', authenticateToken, async (req: Request, res:
               messages: [
                 {
                   role: 'system',
-                  content: 'You are an educational assistant for children learning English. Provide a detailed, age-appropriate description for this book page.'
+                  content: 'You are an educational assistant for children learning English. Provide a comprehensive, complete, age-appropriate description for this book page. Include all visible text, characters, actions, and educational details. Do not truncate your response.'
                 },
                 {
                   role: 'user',
                   content: [
                     {
                       type: 'text',
-                      text: 'Please describe this children\'s book page image clearly and engagingly. Focus on characters, actions, setting, and any educational details.'
+                      text: 'Please describe this children\'s book page image clearly, thoroughly, and engagingly. Include ALL visible text, characters, actions, setting details, and educational elements you can observe. Make sure the description is complete and not cut off prematurely.'
                     },
                     {
                       type: 'image_url',
@@ -1846,7 +1852,7 @@ router.post('/books/analyze-image', authenticateToken, async (req: Request, res:
                   ]
                 }
               ],
-              max_tokens: 512,
+              max_tokens: maxTokens,
               temperature: 0.3
             }),
             signal: controller.signal

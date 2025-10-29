@@ -48,6 +48,7 @@ const logger = {
 
 const INLINE_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10MB limit for inline images
 const DEFAULT_OPENAI_VISION_TIMEOUT_MS = 120_000; // 120 seconds to handle complex image processing
+const DEFAULT_OPENAI_VISION_MAX_TOKENS = 2_024; // Allow longer descriptions from vision responses
 const OPENAI_RETRY_ATTEMPTS = 1; // Reduced retry attempts since we increased timeout per attempt
 
 const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
@@ -170,6 +171,7 @@ type BooksBindings = {
     OPENAI_VISION_MODEL?: string;
     OPENAI_BASE_URL?: string;
     OPENAI_VISION_TIMEOUT_MS?: string;
+    OPENAI_VISION_MAX_TOKENS?: string;
     OPENAI_GLOSSARY_TIMEOUT_MS?: string;
     NODE_ENV?: string;
   };
@@ -811,7 +813,7 @@ books.post('/pages/:pageId/glossary/analyze', jwtMiddleware, async (c) => {
           return errorText.toLowerCase().includes('response_format');
         };
 
-        let finalResponse = response;
+        let finalResponse: Response | null = response;
 
         if (!response.ok) {
           const errorText = await response.text();
@@ -1644,6 +1646,11 @@ books.post('/analyze-image', jwtMiddleware, async (c) => {
     const timeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0
       ? parsedTimeout
       : DEFAULT_OPENAI_VISION_TIMEOUT_MS;
+    const visionMaxTokensRaw = c.env.OPENAI_VISION_MAX_TOKENS;
+    const parsedMaxTokens = visionMaxTokensRaw ? Number.parseInt(visionMaxTokensRaw, 10) : Number.NaN;
+    const maxTokens = Number.isFinite(parsedMaxTokens) && parsedMaxTokens > 0
+      ? parsedMaxTokens
+      : DEFAULT_OPENAI_VISION_MAX_TOKENS;
 
     const openaiVisionModel = c.env.OPENAI_VISION_MODEL || 'gpt-4o-mini';
     const inlineImageUrl = await getInlineImageUrl(image_url);
@@ -1698,7 +1705,7 @@ books.post('/analyze-image', jwtMiddleware, async (c) => {
                 ]
               }
             ],
-            max_tokens: 1024, // Allow for detailed descriptions without truncation
+            max_tokens: maxTokens, // Allow for detailed descriptions without truncation
             temperature: 0.2  // Lower temperature for more consistent, faster responses
           }),
           signal: controller.signal
