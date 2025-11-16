@@ -617,7 +617,13 @@ const ReadingSession: React.FC = () => {
       toast.success(`Added "${word.word}" to your vocabulary!`);
     } catch (error) {
       console.error('Error adding word to vocabulary from glossary:', error);
-      toast.error('Failed to add word to vocabulary');
+      
+      // Handle duplicate word gracefully (409 Conflict)
+      if (error instanceof Error && error.message.includes('already in user vocabulary')) {
+        toast.info(`"${word.word}" is already in your vocabulary!`);
+      } else {
+        toast.error('Failed to add word to vocabulary');
+      }
     }
   };
 

@@ -196,15 +196,27 @@ export default function Library() {
     >
       {/* Book Cover (card click navigates to reader; explicit button previews PDF) */}
       <div
-        className="relative aspect-[3/4] bg-gradient-to-br from-blue-100 via-purple-100 to-pink-100 rounded-lg mb-4 flex items-center justify-center group-hover:scale-105 transition-transform"
+        className="relative aspect-[3/4] bg-gradient-to-br from-blue-100 via-purple-100 to-pink-100 rounded-lg mb-4 overflow-hidden group-hover:scale-105 transition-transform"
         aria-label="Book cover"
       >
-        <BookOpen className="w-12 h-12 text-blue-500" />
+        {book.cover_image_url ? (
+          <img
+            src={book.cover_image_url}
+            alt={`Cover of ${book.title}`}
+            className="absolute inset-0 w-full h-full object-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <BookOpen className="w-12 h-12 text-blue-500" />
+          </div>
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/10 via-black/0 to-white/0 pointer-events-none" />
         {book.pdf_file_url && (
           <button
             type="button"
             onClick={(e) => { e.preventDefault(); e.stopPropagation(); setPdfUrl(book.pdf_file_url!); }}
-            className="absolute bottom-2 right-2 text-[11px] px-2 py-1 rounded bg-white/95 text-blue-700 border border-blue-200 shadow-sm hover:bg-white"
+            className="absolute bottom-2 right-2 z-10 text-[11px] px-2 py-1 rounded bg-white/95 text-blue-700 border border-blue-200 shadow-sm hover:bg-white"
             aria-label="Preview PDF"
             title="Preview PDF"
           >

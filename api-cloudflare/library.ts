@@ -18,9 +18,39 @@ const library = new Hono<LibraryBindings>();
 library.get('/', async (c) => {
   try {
     const supabase = createSupabaseClient(c.env);
-    const { data, error } = await supabase.from('books').select('*');
+    const { data: books, error } = await supabase.from('books').select('*');
     if (error) return c.json({ error: error.message }, 500);
-    return c.json({ books: data });
+
+    // Load page counts & first-page covers to avoid empty page counts and placeholders
+    const pageMeta: Record<string, { count: number; cover?: string | null }> = {};
+    if (books && books.length > 0) {
+      const bookIds = books.map(book => book.id);
+      const { data: pageRows, error: pageError } = await supabase
+        .from('book_pages')
+        .select('book_id, image_url, page_number')
+        .in('book_id', bookIds)
+        .order('page_number', { ascending: true });
+
+      if (pageError) {
+        console.error('Error fetching page counts:', pageError);
+      } else if (pageRows) {
+        pageRows.forEach(row => {
+          const existing = pageMeta[row.book_id] || { count: 0, cover: null };
+          pageMeta[row.book_id] = {
+            count: existing.count + 1,
+            cover: existing.cover || row.image_url || null
+          };
+        });
+      }
+    }
+
+    const booksWithCounts = (books || []).map(book => ({
+      ...book,
+      page_count: book.page_count || pageMeta[book.id]?.count || 0,
+      cover_image_url: book.cover_image_url || pageMeta[book.id]?.cover || null
+    }));
+
+    return c.json({ books: booksWithCounts });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to load library';
     return c.json({ error: message }, 500);

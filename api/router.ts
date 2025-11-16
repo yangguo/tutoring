@@ -1303,8 +1303,37 @@ router.get('/books', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    // Derive up-to-date page counts and first-page cover images from book_pages
+    const pageMeta: Record<string, { count: number; cover?: string | null }> = {};
+    if (books && books.length > 0) {
+      const bookIds = books.map(book => book.id);
+      const { data: pageRows, error: pageCountError } = await supabase
+        .from('book_pages')
+        .select('book_id, image_url, page_number')
+        .in('book_id', bookIds)
+        .order('page_number', { ascending: true });
+
+      if (pageCountError) {
+        console.error('Failed to load page counts:', pageCountError);
+      } else if (pageRows) {
+        pageRows.forEach(row => {
+          const existing = pageMeta[row.book_id] || { count: 0, cover: null };
+          pageMeta[row.book_id] = {
+            count: existing.count + 1,
+            cover: existing.cover || row.image_url || null
+          };
+        });
+      }
+    }
+
+    const booksWithCounts = (books || []).map(book => ({
+      ...book,
+      page_count: book.page_count || pageMeta[book.id]?.count || 0,
+      cover_image_url: book.cover_image_url || pageMeta[book.id]?.cover || null
+    }));
+
     res.json({
-      books: books || [],
+      books: booksWithCounts,
       pagination: {
         page: pageNum,
         limit: limitNum,
@@ -1469,10 +1498,15 @@ router.get('/books/:bookId', async (req: Request, res: Response): Promise<void> 
       return;
     }
 
+    const pageCount = Math.max(book.page_count || 0, pages?.length || 0);
+    const coverImage = book.cover_image_url || pages?.[0]?.image_url || null;
+
     res.json({
       book: {
         ...book,
-        pages: pages || []
+        pages: pages || [],
+        page_count: pageCount,
+        cover_image_url: coverImage
       }
     });
   } catch (error) {
