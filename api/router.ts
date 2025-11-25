@@ -4096,6 +4096,7 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
             book_id: bookId,
             page_number: pageNumber,
             image_url: urlData.publicUrl,
+            image_path: filePath,
             image_description: imageDescription
           })
           .select()
@@ -4133,15 +4134,40 @@ router.post('/upload/book/:bookId/pages', authenticateToken, requireRole(['paren
   }
 });
 
+const getStoragePathFromPublicUrl = (publicUrl?: string | null): string | null => {
+  if (!publicUrl) {
+    return null;
+  }
+
+  const marker = '/object/public/book-files/';
+
+  try {
+    const parsed = new URL(publicUrl);
+    const markerIndex = parsed.pathname.indexOf(marker);
+    if (markerIndex === -1) {
+      return null;
+    }
+    const pathFromMarker = parsed.pathname.slice(markerIndex + marker.length);
+    return pathFromMarker || null;
+  } catch {
+    // Fallback to string split in case URL parsing fails
+    const parts = publicUrl.split(marker);
+    if (parts.length === 2 && parts[1]) {
+      return parts[1].split('?')[0] || null;
+    }
+    return null;
+  }
+};
+
 const deleteBookHandler = async (req: Request, res: Response): Promise<void> => {
   try {
     const { bookId } = req.params;
-    const { userId } = (req as any).user;
+    const { userId, role } = (req as any).user;
 
-    // Verify book exists and user has permission
+    // Verify book exists and get file paths
     const { data: bookData, error: bookError } = await supabase
       .from('books')
-      .select('id, uploaded_by, file_path')
+      .select('id, title, uploaded_by, file_path, file_url')
       .eq('id', bookId)
       .single();
 
@@ -4150,45 +4176,89 @@ const deleteBookHandler = async (req: Request, res: Response): Promise<void> => 
       return;
     }
 
-    if (bookData.uploaded_by !== userId) {
+    // Check permissions - admin can delete any book, others only their own
+    if (role !== 'admin' && bookData.uploaded_by !== userId) {
       res.status(403).json({ error: 'Permission denied' });
       return;
     }
 
-    // Get all book pages to delete their files
+    // Get all book pages to collect their file paths
     const { data: pages } = await supabase
       .from('book_pages')
-      .select('image_path')
+      .select('image_path, image_url')
       .eq('book_id', bookId);
 
-    // Delete book pages from database
-    await supabase
-      .from('book_pages')
-      .delete()
-      .eq('book_id', bookId);
+    // Collect all files to delete from storage
+    const filesToDelete: string[] = [];
+    const bookFilePath = bookData.file_path ?? getStoragePathFromPublicUrl(bookData.file_url);
+    if (bookFilePath) {
+      filesToDelete.push(bookFilePath);
+    }
 
-    // Delete book from database
+    if (pages) {
+      for (const page of pages) {
+        if (page.image_path) {
+          filesToDelete.push(page.image_path);
+          continue;
+        }
+
+        const derivedPath = getStoragePathFromPublicUrl(page.image_url);
+        if (derivedPath) {
+          filesToDelete.push(derivedPath);
+        }
+      }
+    }
+
+    // Remove book from associated lesson plans
+    const { data: plans } = await supabase
+      .from('lesson_plans')
+      .select('id, book_ids')
+      .contains('book_ids', [bookId]);
+
+    if (plans && plans.length > 0) {
+      for (const plan of plans) {
+        const updatedBookIds = plan.book_ids.filter((id: string) => id !== bookId);
+        await supabase
+          .from('lesson_plans')
+          .update({ book_ids: updatedBookIds })
+          .eq('id', plan.id);
+      }
+    }
+
+    // Delete book from database (cascades to book_pages, reading_sessions, speaking_sessions)
     const { error: deleteError } = await supabase
       .from('books')
       .delete()
       .eq('id', bookId);
 
     if (deleteError) {
+      console.error('Failed to delete book from database:', deleteError);
       res.status(500).json({ error: 'Failed to delete book' });
       return;
     }
 
-    // Delete files from storage
-    const filesToDelete = [bookData.file_path];
-    if (pages) {
-      filesToDelete.push(...pages.map(page => page.image_path));
+    // Delete files from storage (non-critical, log errors but don't fail)
+    if (filesToDelete.length > 0) {
+      try {
+        const { error: storageError } = await supabase.storage
+          .from('book-files')
+          .remove(filesToDelete);
+        
+        if (storageError) {
+          console.warn('Failed to delete some files from storage:', storageError);
+        }
+      } catch (storageError) {
+        console.warn('Storage cleanup error:', storageError);
+      }
     }
 
-    await supabase.storage
-      .from('book-files')
-      .remove(filesToDelete.filter(Boolean));
-
-    res.json({ message: 'Book deleted successfully' });
+    res.json({ 
+      message: 'Book deleted successfully',
+      deletedBook: {
+        id: bookData.id,
+        title: bookData.title
+      }
+    });
   } catch (error) {
     console.error('Delete book error:', error);
     res.status(500).json({ error: 'Internal server error' });

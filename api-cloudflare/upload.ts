@@ -46,6 +46,30 @@ const validateBookMetadata = (data: any) => {
   return errors;
 };
 
+const PUBLIC_BOOK_FILES_MARKER = '/object/public/book-files/';
+
+const getStoragePathFromPublicUrl = (publicUrl?: string | null): string | null => {
+  if (!publicUrl) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(publicUrl);
+    const markerIndex = parsed.pathname.indexOf(PUBLIC_BOOK_FILES_MARKER);
+    if (markerIndex === -1) {
+      return null;
+    }
+    const relativePath = parsed.pathname.slice(markerIndex + PUBLIC_BOOK_FILES_MARKER.length);
+    return relativePath || null;
+  } catch {
+    const parts = publicUrl.split(PUBLIC_BOOK_FILES_MARKER);
+    if (parts.length === 2 && parts[1]) {
+      return parts[1].split('?')[0] || null;
+    }
+    return null;
+  }
+};
+
 // Book upload endpoint
 upload.post('/book', async (c) => {
   try {
@@ -244,7 +268,7 @@ upload.get('/books', async (c) => {
       // Verify book exists and user has permission
       const { data: bookData, error: bookError } = await supabase
         .from('books')
-        .select('id, uploaded_by, file_path')
+        .select('id, uploaded_by, file_path, file_url')
         .eq('id', bookId)
         .single();
 
@@ -280,7 +304,7 @@ upload.get('/books', async (c) => {
       // Get all book pages to delete their files
       const { data: pages } = await supabase
         .from('book_pages')
-        .select('image_path')
+        .select('image_path, image_url')
         .eq('book_id', bookId);
 
       // Delete book pages from database
@@ -301,11 +325,24 @@ upload.get('/books', async (c) => {
 
       // Delete files from storage (non-blocking)
       try {
-        const filesToDelete = [bookData.file_path];
-        if (pages) {
-          filesToDelete.push(...pages.map(p => p.image_path).filter(Boolean));
+        const filesToDelete: string[] = [];
+        const bookFilePath = bookData.file_path ?? getStoragePathFromPublicUrl(bookData.file_url);
+        if (bookFilePath) {
+          filesToDelete.push(bookFilePath);
         }
-        await supabase.storage.from('book-files').remove(filesToDelete);
+
+        if (pages) {
+          for (const page of pages) {
+            const pagePath = page.image_path ?? getStoragePathFromPublicUrl(page.image_url);
+            if (pagePath) {
+              filesToDelete.push(pagePath);
+            }
+          }
+        }
+
+        if (filesToDelete.length > 0) {
+          await supabase.storage.from('book-files').remove(filesToDelete);
+        }
       } catch (storageError) {
         console.warn('Failed to delete some files from storage:', storageError);
         // Don't fail the request if storage cleanup fails

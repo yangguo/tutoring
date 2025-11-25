@@ -38,6 +38,7 @@ export interface BookPage {
   book_id: string;
   page_number: number;
   image_url: string;
+  image_path?: string;
   text_content?: string;
   audio_url?: string;
   image_description?: string;

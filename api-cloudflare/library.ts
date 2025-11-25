@@ -15,6 +15,30 @@ type LibraryBindings = {
 
 const library = new Hono<LibraryBindings>();
 
+const PUBLIC_BOOK_FILES_MARKER = '/object/public/book-files/';
+
+const getStoragePathFromPublicUrl = (publicUrl?: string | null): string | null => {
+  if (!publicUrl) {
+    return null;
+  }
+
+  try {
+    const parsed = new URL(publicUrl);
+    const markerIndex = parsed.pathname.indexOf(PUBLIC_BOOK_FILES_MARKER);
+    if (markerIndex === -1) {
+      return null;
+    }
+    const relativePath = parsed.pathname.slice(markerIndex + PUBLIC_BOOK_FILES_MARKER.length);
+    return relativePath || null;
+  } catch {
+    const parts = publicUrl.split(PUBLIC_BOOK_FILES_MARKER);
+    if (parts.length === 2 && parts[1]) {
+      return parts[1].split('?')[0] || null;
+    }
+    return null;
+  }
+};
+
 library.get('/', async (c) => {
   try {
     const supabase = createSupabaseClient(c.env);
@@ -68,10 +92,10 @@ library.delete('/:bookId', jwtMiddleware, async (c) => {
       return c.json({ error: 'Book ID is required' }, 400);
     }
 
-    // First, check if the book exists and get its details
+    // Get book details and file paths
     const { data: book, error: bookError } = await supabase
       .from('books')
-      .select('id, title, uploaded_by')
+      .select('id, title, uploaded_by, file_path, file_url')
       .eq('id', bookId)
       .single();
 
@@ -79,8 +103,7 @@ library.delete('/:bookId', jwtMiddleware, async (c) => {
       return c.json({ error: 'Book not found' }, 404);
     }
 
-    // Check authorization - only the uploader or admin can delete
-    // Admins can delete any book, users can only delete books they uploaded
+    // Check authorization - admin can delete any book, others only their own
     const canDelete = 
       user.role === 'admin' || 
       (book.uploaded_by === user.userId);
@@ -89,10 +112,29 @@ library.delete('/:bookId', jwtMiddleware, async (c) => {
       return c.json({ error: 'Unauthorized: You can only delete books you uploaded or admin can delete any book' }, 403);
     }
 
-    // Start a transaction-like operation by handling related data
-    // Note: Most related tables have CASCADE DELETE, but we need to handle lesson_plans manually
+    // Get all book pages to collect their file paths
+    const { data: pages } = await supabase
+      .from('book_pages')
+      .select('image_path, image_url')
+      .eq('book_id', bookId);
 
-    // 1. Remove book ID from lesson_plans.book_ids arrays
+    // Collect all files to delete from storage
+    const filesToDelete: string[] = [];
+    const bookFilePath = book.file_path ?? getStoragePathFromPublicUrl(book.file_url);
+    if (bookFilePath) {
+      filesToDelete.push(bookFilePath);
+    }
+
+    if (pages) {
+      for (const page of pages) {
+        const pagePath = page.image_path ?? getStoragePathFromPublicUrl(page.image_url);
+        if (pagePath) {
+          filesToDelete.push(pagePath);
+        }
+      }
+    }
+
+    // Remove book from associated lesson plans
     const { data: lessonPlans, error: lessonError } = await supabase
       .from('lesson_plans')
       .select('id, book_ids')
@@ -100,7 +142,6 @@ library.delete('/:bookId', jwtMiddleware, async (c) => {
 
     if (lessonError) {
       console.error('Error fetching lesson plans:', lessonError);
-      // Continue with deletion even if this fails
     }
 
     // Update lesson plans to remove the book ID
@@ -114,8 +155,7 @@ library.delete('/:bookId', jwtMiddleware, async (c) => {
       }
     }
 
-    // 2. Delete the book (this will cascade delete related records automatically)
-    // Tables with CASCADE DELETE: book_pages, reading_sessions, speaking_sessions, book_discussions
+    // Delete book from database (cascades to book_pages, reading_sessions, speaking_sessions)
     const { error: deleteError } = await supabase
       .from('books')
       .delete()
@@ -124,6 +164,21 @@ library.delete('/:bookId', jwtMiddleware, async (c) => {
     if (deleteError) {
       console.error('Error deleting book:', deleteError);
       return c.json({ error: 'Failed to delete book: ' + deleteError.message }, 500);
+    }
+
+    // Delete files from storage (non-critical, log errors but don't fail)
+    if (filesToDelete.length > 0) {
+      try {
+        const { error: storageError } = await supabase.storage
+          .from('book-files')
+          .remove(filesToDelete);
+        
+        if (storageError) {
+          console.warn('Failed to delete some files from storage:', storageError);
+        }
+      } catch (storageError) {
+        console.warn('Storage cleanup error:', storageError);
+      }
     }
 
     return c.json({ 
