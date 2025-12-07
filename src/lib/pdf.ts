@@ -2,10 +2,8 @@
 // Uses pdfjs-dist with a worker via Vite's ?worker import.
 
 // pdfjs-dist ESM build
-// eslint-disable-next-line import/no-unresolved
 import * as pdfjsLib from 'pdfjs-dist';
 // Vite worker import to initialize PDF.js worker
-// eslint-disable-next-line import/no-unresolved
 // @ts-ignore - Vite query import provides a Worker constructor
 import PDFWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker';
 
