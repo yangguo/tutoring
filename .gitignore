@@ -196,3 +196,6 @@ out/
 api-cloudflare/.wrangler/
 # Local Netlify folder
 .netlify
+
+# Local Git worktrees
+.worktrees/
