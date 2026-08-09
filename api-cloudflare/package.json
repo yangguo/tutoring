@@ -9,9 +9,9 @@
     "deploy": "wrangler deploy --config wrangler.toml"
   },
   "dependencies": {
-    "hono": "^4.6.0",
+    "hono": "^4.12.18",
     "@supabase/supabase-js": "^2.45.0",
-    "wrangler": "^3.78.0"
+    "wrangler": "^4.92.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0",
